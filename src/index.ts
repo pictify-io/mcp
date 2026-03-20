@@ -30,21 +30,22 @@ function log(message: string) {
 const apiKey = process.env.PICTIFY_API_KEY;
 if (!apiKey) {
   console.error(
-    "Error: PICTIFY_API_KEY environment variable is required.\n" +
-      "Get your API key at https://pictify.io/dashboard\n\n" +
-      "Set it in your MCP client configuration:\n" +
-      '  "env": { "PICTIFY_API_KEY": "pk_live_your_key_here" }',
+    "Error: PICTIFY_API_KEY environment variable is required.\n\n" +
+      "To get your API key:\n" +
+      "  1. Sign up or log in at https://pictify.io\n" +
+      "  2. Go to https://pictify.io/dashboard/api-tokens\n" +
+      "  3. Create a new API token and copy it\n\n" +
+      "Then set it in your MCP client configuration:\n" +
+      '  "env": { "PICTIFY_API_KEY": "your_api_key" }',
   );
   process.exit(1);
 }
-
 
 // Initialize client
 const baseUrl = process.env.PICTIFY_BASE_URL || "https://api.pictify.io";
 const client = new PictifyClient(apiKey, baseUrl, pkg.version);
 
 log(`Initializing with base URL: ${baseUrl}`);
-log(`API key: ${apiKey.substring(0, 12)}...`);
 
 // Create MCP server
 const server = new McpServer({

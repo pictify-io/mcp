@@ -5,6 +5,7 @@
   "type": "module",
   "main": "build/index.js",
   "bin": {
+    "mcp-server": "./build/index.js",
     "pictify-mcp": "./build/index.js",
     "pictify-mcp-http": "./build/http.js"
   },
@@ -19,12 +20,34 @@
   ],
   "keywords": [
     "mcp",
+    "mcp-server",
+    "model-context-protocol",
     "pictify",
     "image-generation",
+    "screenshot",
+    "og-image",
+    "social-card",
+    "gif",
+    "pdf",
+    "html-to-image",
+    "html-to-pdf",
+    "template",
+    "batch-render",
+    "ab-testing",
     "ai",
     "claude",
-    "model-context-protocol"
+    "cursor",
+    "windsurf"
   ],
+  "author": "Pictify <support@pictify.io> (https://pictify.io)",
+  "homepage": "https://pictify.io",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pictify-io/pictify-mcp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pictify-io/pictify-mcp/issues"
+  },
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.0",

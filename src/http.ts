@@ -80,6 +80,23 @@ function createMcpServer(apiKey: string): McpServer {
 
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 
+// --- CORS -------------------------------------------------------------------
+// Claude.ai makes browser requests to this server, so CORS is required.
+app.use((_req, res, next) => {
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, Mcp-Session-Id",
+  );
+  res.header("Access-Control-Expose-Headers", "Mcp-Session-Id, WWW-Authenticate");
+  if (_req.method === "OPTIONS") {
+    res.status(204).end();
+    return;
+  }
+  next();
+});
+
 // --- OAuth metadata router -------------------------------------------------
 // Advertises Protected Resource Metadata pointing clients to the Pictify
 // backend's OAuth authorization server so they can discover how to obtain

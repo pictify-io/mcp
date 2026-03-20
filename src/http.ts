@@ -85,7 +85,9 @@ const app = createMcpExpressApp({ host: "0.0.0.0" });
 // backend's OAuth authorization server so they can discover how to obtain
 // tokens.
 
-const mcpServerUrl = new URL(`http://localhost:${port}`);
+const mcpServerUrl = new URL(
+  process.env.MCP_PUBLIC_URL || `http://localhost:${port}`,
+);
 
 const oauthMetadata = {
   issuer: authServerUrl,
@@ -123,7 +125,7 @@ const transports: Record<string, StreamableHTTPServerTransport> = {};
 // --- MCP endpoint handlers --------------------------------------------------
 
 // POST /mcp  — handles JSON-RPC requests (including initialization)
-app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
+app.post("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
   // Reuse an existing session
@@ -182,7 +184,7 @@ app.post("/mcp", authMiddleware, async (req: Request, res: Response) => {
 });
 
 // GET /mcp  — SSE stream for server-initiated messages
-app.get("/mcp", authMiddleware, async (req: Request, res: Response) => {
+app.get("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
   if (!sessionId || !transports[sessionId]) {
@@ -198,7 +200,7 @@ app.get("/mcp", authMiddleware, async (req: Request, res: Response) => {
 });
 
 // DELETE /mcp  — terminates a session
-app.delete("/mcp", authMiddleware, async (req: Request, res: Response) => {
+app.delete("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
   if (!sessionId || !transports[sessionId]) {
@@ -220,7 +222,7 @@ app.delete("/mcp", authMiddleware, async (req: Request, res: Response) => {
 // ---------------------------------------------------------------------------
 
 const httpServer = app.listen(port, "0.0.0.0", () => {
-  console.log(`[pictify-mcp-http] Pictify MCP HTTP server listening on http://0.0.0.0:${port}/mcp`);
+  console.log(`[pictify-mcp-http] Pictify MCP HTTP server listening on http://0.0.0.0:${port}`);
   console.log(`[pictify-mcp-http] OAuth metadata at ${resourceMetadataUrl}`);
 });
 

@@ -7,24 +7,35 @@ export function registerPdfTools(server: McpServer, client: PictifyClient) {
   server.tool(
     "pictify_render_pdf",
     "Generate a single-page PDF from a saved template with variable substitutions. " +
-      "Use pictify_get_template_variables first to discover available variables. " +
-      "Returns the PDF URL. Supports standard page sizes (A4, Letter, etc.) and custom dimensions.",
+      "Common use cases: invoices, certificates, receipts, contracts, reports, event tickets, " +
+      "shipping labels, and any document that needs to be generated programmatically. " +
+      "WORKFLOW: Call pictify_get_template_variables first to discover available variables and their types, " +
+      "then call this tool with the appropriate variable values. " +
+      "Supports standard page sizes (A4, Letter, Legal, etc.) — use pictify_list_pdf_presets to see all options. " +
+      "Returns the hosted PDF URL.",
     {
       templateId: z
         .string()
-        .describe("The template UID to render as a PDF"),
+        .describe("The template UID to render as a PDF. Use pictify_list_templates to find available templates."),
       variables: z
         .record(z.unknown())
         .optional()
-        .describe("Template variables as key-value pairs (e.g., { title: 'Hello', name: 'World' })"),
+        .describe(
+          "Template variables as key-value pairs (e.g., { title: 'Invoice #001', amount: '$1,000', date: '2024-03-09' }). " +
+            "Use pictify_get_template_variables to discover available variable names and types.",
+        ),
       preset: z
         .string()
         .optional()
-        .describe("PDF page size preset (e.g., 'A4', 'Letter', 'Legal'). Use pictify_list_pdf_presets to see available options."),
+        .describe(
+          "PDF page size preset (e.g., 'A4', 'Letter', 'Legal'). " +
+            "Use pictify_list_pdf_presets to see all available presets with their dimensions. " +
+            "If not specified, uses the template's default dimensions.",
+        ),
       title: z
         .string()
         .optional()
-        .describe("PDF document title metadata"),
+        .describe("PDF document title metadata — appears in the browser tab when the PDF is opened"),
     },
     async ({ templateId, variables, preset, title }) => {
       try {
@@ -58,10 +69,13 @@ export function registerPdfTools(server: McpServer, client: PictifyClient) {
 
   server.tool(
     "pictify_render_multi_page_pdf",
-    "Generate a multi-page PDF from a template with multiple sets of variables. " +
-      "Each variable set produces one page. Supports 1-100 pages per document. " +
-      "Use pictify_get_template_variables first to discover available variables. " +
-      "Returns the combined PDF URL.",
+    "Generate a multi-page PDF from a template by providing multiple sets of variables. " +
+      "Each variable set produces one page in the final document. Supports 1-100 pages per PDF. " +
+      "Common use cases: bulk invoice generation, certificate batches for events/courses, " +
+      "multi-page reports, product catalogs, and employee ID cards. " +
+      "WORKFLOW: Call pictify_get_template_variables first to discover available variables, " +
+      "then provide an array of variable sets (one per page). " +
+      "Returns a single combined PDF URL. For generating separate image files per set, use pictify_batch_render instead.",
     {
       templateId: z
         .string()
@@ -70,11 +84,14 @@ export function registerPdfTools(server: McpServer, client: PictifyClient) {
         .array(z.record(z.unknown()))
         .min(1)
         .max(100)
-        .describe("Array of variable sets, one per page (1-100 items). Each item is a key-value object of template variables."),
+        .describe(
+          "Array of variable sets, one per page (1-100 items). " +
+            "Example: [{ name: 'Alice', score: '95' }, { name: 'Bob', score: '87' }] produces a 2-page PDF.",
+        ),
       preset: z
         .string()
         .optional()
-        .describe("PDF page size preset (e.g., 'A4', 'Letter')"),
+        .describe("PDF page size preset (e.g., 'A4', 'Letter'). Use pictify_list_pdf_presets to see options."),
       title: z
         .string()
         .optional()
@@ -111,9 +128,9 @@ export function registerPdfTools(server: McpServer, client: PictifyClient) {
 
   server.tool(
     "pictify_list_pdf_presets",
-    "List available PDF page size presets (e.g., A4, Letter, Legal). " +
+    "List all available PDF page size presets with their dimensions. " +
       "Use these preset names when calling pictify_render_pdf or pictify_render_multi_page_pdf. " +
-      "Returns preset names with their dimensions.",
+      "Common presets include A4 (210x297mm), Letter (8.5x11in), Legal (8.5x14in), and more.",
     {},
     async () => {
       try {

@@ -1,12 +1,3 @@
-import { readFileSync } from "fs";
-import { fileURLToPath } from "url";
-import { dirname, join } from "path";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(
-  readFileSync(join(__dirname, "..", "package.json"), "utf-8"),
-);
-
 export class PictifyApiError extends Error {
   constructor(
     public status: number,
@@ -21,25 +12,50 @@ export class PictifyApiError extends Error {
   }
 }
 
+type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+function parseErrorField(body: Record<string, unknown>, field: string): string | undefined {
+  const value = body[field];
+  return typeof value === "string" ? value : undefined;
+}
+
+function parseErrorArray(body: Record<string, unknown>): Array<{ field: string; message: string; code: string }> | undefined {
+  if (!Array.isArray(body.errors)) return undefined;
+  return body.errors as Array<{ field: string; message: string; code: string }>;
+}
+
 export class PictifyClient {
   private baseUrl: string;
   private apiKey: string;
+  private userAgent: string;
   private maxRetries: number;
   private timeout: number;
 
-  constructor(apiKey: string, baseUrl = "https://api.pictify.io") {
+  constructor(apiKey: string, baseUrl = "https://api.pictify.io", version = "0.1.0") {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl.replace(/\/+$/, "");
+    this.userAgent = `@pictify/mcp-server/${version}`;
     this.maxRetries = 3;
     this.timeout = 60_000;
   }
 
+  private buildHeaders(method: HttpMethod): Record<string, string> {
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${this.apiKey}`,
+      "User-Agent": this.userAgent,
+    };
+    if (method === "POST" || method === "PUT") {
+      headers["Content-Type"] = "application/json";
+    }
+    return headers;
+  }
+
   async request<T>(
-    method: string,
+    method: HttpMethod,
     path: string,
     body?: unknown,
   ): Promise<T> {
-    let lastError: Error | undefined;
+    let lastError: Error = new Error("Request failed after retries");
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       if (attempt > 0) {
@@ -53,11 +69,7 @@ export class PictifyClient {
       try {
         const res = await fetch(`${this.baseUrl}${path}`, {
           method,
-          headers: {
-            Authorization: `Bearer ${this.apiKey}`,
-            "Content-Type": "application/json",
-            "User-Agent": `@pictify/mcp-server/${pkg.version}`,
-          },
+          headers: this.buildHeaders(method),
           body: body ? JSON.stringify(body) : undefined,
           signal: controller.signal,
         });
@@ -70,10 +82,10 @@ export class PictifyClient {
           if (res.status < 500) {
             throw new PictifyApiError(
               res.status,
-              (errorBody.type as string) ?? "unknown",
-              (errorBody.title as string) ?? res.statusText,
-              (errorBody.detail as string) ?? "Request failed",
-              errorBody.errors as Array<{ field: string; message: string; code: string }> | undefined,
+              parseErrorField(errorBody, "type") ?? "unknown",
+              parseErrorField(errorBody, "title") ?? res.statusText,
+              parseErrorField(errorBody, "detail") ?? "Request failed",
+              parseErrorArray(errorBody),
               res.headers.get("Retry-After")
                 ? parseInt(res.headers.get("Retry-After")!, 10)
                 : undefined,
@@ -82,9 +94,9 @@ export class PictifyClient {
 
           lastError = new PictifyApiError(
             res.status,
-            (errorBody.type as string) ?? "server_error",
-            (errorBody.title as string) ?? "Server Error",
-            (errorBody.detail as string) ?? `Server returned ${res.status}`,
+            parseErrorField(errorBody, "type") ?? "server_error",
+            parseErrorField(errorBody, "title") ?? "Server Error",
+            parseErrorField(errorBody, "detail") ?? `Server returned ${res.status}`,
           );
           continue;
         }
@@ -99,7 +111,7 @@ export class PictifyClient {
             408,
             "timeout",
             "Request Timeout",
-            "The request timed out after 60 seconds",
+            `The request timed out after ${this.timeout / 1000} seconds`,
           );
         }
         if (attempt === this.maxRetries) throw err;

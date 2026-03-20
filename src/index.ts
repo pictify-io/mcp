@@ -16,7 +16,7 @@ import { registerExperimentTools } from "./tools/experiments.js";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
   readFileSync(join(__dirname, "..", "package.json"), "utf-8"),
-);
+) as { version: string };
 
 const DEBUG = process.env.PICTIFY_DEBUG === "true";
 
@@ -38,22 +38,10 @@ if (!apiKey) {
   process.exit(1);
 }
 
-if (!apiKey.startsWith("pk_live_") && !apiKey.startsWith("pk_test_")) {
-  console.error(
-    'Warning: API key does not match expected format (pk_live_* or pk_test_*). ' +
-    'Proceeding anyway, but requests may fail if the key is invalid.',
-  );
-}
-
-if (apiKey.startsWith("pk_test_")) {
-  console.error(
-    "Note: Using test API key. Renders will be sandboxed and rate-limited.",
-  );
-}
 
 // Initialize client
 const baseUrl = process.env.PICTIFY_BASE_URL || "https://api.pictify.io";
-const client = new PictifyClient(apiKey, baseUrl);
+const client = new PictifyClient(apiKey, baseUrl, pkg.version);
 
 log(`Initializing with base URL: ${baseUrl}`);
 log(`API key: ${apiKey.substring(0, 12)}...`);

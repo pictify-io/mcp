@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {
@@ -13,6 +13,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { Request, Response } from "express";
+import express from "express";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
@@ -34,18 +35,34 @@ const pkg = JSON.parse(
 ) as { version: string };
 
 const baseUrl = process.env.PICTIFY_BASE_URL || "https://api.pictify.io";
-const authServerUrl =
-  process.env.PICTIFY_AUTH_SERVER_URL || "https://api.pictify.io";
 const port = parseInt(process.env.MCP_PORT || "3000", 10);
+
+// ---------------------------------------------------------------------------
+// In-memory stores for OAuth codes and clients
+// ---------------------------------------------------------------------------
+
+// Maps authorization code -> { apiToken, codeChallenge, redirectUri, state }
+const authCodes = new Map<
+  string,
+  { apiToken: string; codeChallenge: string; redirectUri: string; state: string }
+>();
+
+// Maps client_id -> { client_secret (= Pictify API token), redirect_uris }
+const clients = new Map<
+  string,
+  { client_secret: string; redirect_uris: string[]; client_name: string }
+>();
 
 // ---------------------------------------------------------------------------
 // Token verification — validates Bearer tokens against the Pictify backend
 // ---------------------------------------------------------------------------
 
 const verifyAccessToken = async (token: string): Promise<AuthInfo> => {
+  console.log(`[pictify-mcp-http] Verifying token: ${token.substring(0, 8)}...`);
   const res = await fetch(`${baseUrl}/api/users/`, {
     headers: { Authorization: `Bearer ${token}` },
   });
+  console.log(`[pictify-mcp-http] Token verification: ${res.status}`);
   if (!res.ok) {
     throw new Error("Invalid or expired token");
   }
@@ -53,6 +70,7 @@ const verifyAccessToken = async (token: string): Promise<AuthInfo> => {
     token,
     clientId: "pictify-mcp",
     scopes: ["mcp:tools"],
+    expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60, // 1 year
   };
 };
 
@@ -80,8 +98,19 @@ function createMcpServer(apiKey: string): McpServer {
 
 const app = createMcpExpressApp({ host: "0.0.0.0" });
 
+app.use(express.urlencoded({ extended: false }));
+
+// --- Request logging --------------------------------------------------------
+app.use((req, res, next) => {
+  const start = Date.now();
+  console.log(`[pictify-mcp-http] --> ${req.method} ${req.path}`);
+  res.on("finish", () => {
+    console.log(`[pictify-mcp-http] <-- ${req.method} ${req.path} ${res.statusCode} ${Date.now() - start}ms`);
+  });
+  next();
+});
+
 // --- CORS -------------------------------------------------------------------
-// Claude.ai makes browser requests to this server, so CORS is required.
 app.use((_req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
@@ -97,25 +126,172 @@ app.use((_req, res, next) => {
   next();
 });
 
-// --- OAuth metadata router -------------------------------------------------
-// Advertises Protected Resource Metadata pointing clients to the Pictify
-// backend's OAuth authorization server so they can discover how to obtain
-// tokens.
+// ---------------------------------------------------------------------------
+// OAuth endpoints
+// ---------------------------------------------------------------------------
+// Claude.ai flow:
+//   1. User adds connector with URL https://mcp.pictify.io
+//      and enters their Pictify API token as "OAuth Client Secret"
+//   2. Claude.ai calls POST /register with client_secret
+//   3. Claude.ai opens GET /authorize in browser — auto-approves, redirects
+//      back with auth code
+//   4. Claude.ai calls POST /token to exchange code for access_token
+//   5. All MCP requests use Bearer {access_token} (= Pictify API token)
+// ---------------------------------------------------------------------------
+
+// POST /register — Dynamic Client Registration
+// Claude sends client_secret = user's Pictify API token
+app.post("/register", (req: Request, res: Response) => {
+  const { redirect_uris, client_name, client_secret } = req.body || {};
+
+  if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
+    res.status(400).json({ error: "invalid_client_metadata", error_description: "redirect_uris required" });
+    return;
+  }
+
+  const clientId = randomUUID();
+
+  clients.set(clientId, {
+    client_secret: client_secret || "",
+    redirect_uris,
+    client_name: client_name || "unknown",
+  });
+
+  // Auto-clean after 1 hour
+  setTimeout(() => clients.delete(clientId), 3600_000);
+
+  res.status(201).json({
+    client_id: clientId,
+    client_secret: client_secret || "",
+    client_id_issued_at: Math.floor(Date.now() / 1000),
+    redirect_uris,
+    client_name: client_name || "unknown",
+    grant_types: ["authorization_code"],
+    response_types: ["code"],
+    token_endpoint_auth_method: "none",
+  });
+});
+
+// GET /authorize — auto-approve and redirect with code
+// Two modes:
+//   1. Pre-registered client (via /register with client_secret = API token)
+//   2. Pre-configured client (user entered Client ID + Secret in Claude's Advanced Settings)
+// In mode 2, we don't know the API token yet — it comes in POST /token as client_secret.
+app.get("/authorize", (req: Request, res: Response) => {
+  const clientId = req.query.client_id as string;
+  const redirectUri = req.query.redirect_uri as string;
+  const state = (req.query.state as string) || "";
+  const codeChallenge = (req.query.code_challenge as string) || "";
+
+  if (!clientId || !redirectUri) {
+    res.status(400).json({ error: "invalid_request", error_description: "client_id and redirect_uri required" });
+    return;
+  }
+
+  // Check if client was registered via DCR
+  const client = clients.get(clientId);
+  const apiToken = client?.client_secret || "";
+
+  // Generate authorization code
+  // If we have the API token from registration, embed it.
+  // If not (pre-configured client), it will come via client_secret in /token.
+  const code = randomUUID();
+  authCodes.set(code, { apiToken, codeChallenge, redirectUri, state });
+
+  // Auto-expire code after 10 minutes
+  setTimeout(() => authCodes.delete(code), 600_000);
+
+  // Redirect back to Claude's callback with the code
+  const target = new URL(redirectUri);
+  target.searchParams.set("code", code);
+  if (state) target.searchParams.set("state", state);
+
+  res.redirect(302, target.toString());
+});
+
+// POST /token — exchange code for access_token
+// The API token comes from either:
+//   - DCR registration (stored in authCodes via client_secret)
+//   - Pre-configured credentials (sent as client_secret in this request)
+app.post("/token", (req: Request, res: Response) => {
+  const { grant_type, code, code_verifier, redirect_uri, client_secret } = req.body || {};
+
+  if (grant_type !== "authorization_code") {
+    res.status(400).json({ error: "unsupported_grant_type" });
+    return;
+  }
+
+  const codeData = authCodes.get(code);
+  if (!codeData) {
+    res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
+    return;
+  }
+
+  // One-time use
+  authCodes.delete(code);
+
+  // Validate redirect_uri
+  if (redirect_uri && redirect_uri !== codeData.redirectUri) {
+    res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
+    return;
+  }
+
+  // Validate PKCE if challenge was provided
+  if (codeData.codeChallenge && code_verifier) {
+    const hash = createHash("sha256").update(code_verifier).digest("base64url");
+    if (hash !== codeData.codeChallenge) {
+      res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
+      return;
+    }
+  }
+
+  // Resolve the API token:
+  // 1. From DCR registration (stored in code data)
+  // 2. From pre-configured client_secret sent in this request
+  const apiToken = codeData.apiToken || client_secret;
+
+  if (!apiToken) {
+    res.status(400).json({ error: "invalid_grant", error_description: "No API token provided. Set your Pictify API token as the OAuth Client Secret." });
+    return;
+  }
+
+  res.json({
+    access_token: apiToken,
+    token_type: "bearer",
+    scope: "mcp:tools",
+  });
+});
+
+// POST /revoke
+app.post("/revoke", (_req: Request, res: Response) => {
+  res.status(200).end();
+});
+
+// ---------------------------------------------------------------------------
+// OAuth metadata
+// ---------------------------------------------------------------------------
 
 const mcpServerUrl = new URL(
   process.env.MCP_PUBLIC_URL || `http://localhost:${port}`,
 );
+const publicUrl = mcpServerUrl.origin;
 
 const oauthMetadata = {
-  issuer: authServerUrl,
-  authorization_endpoint: `${authServerUrl}/oauth/authorize`,
-  token_endpoint: `${authServerUrl}/oauth/token`,
-  registration_endpoint: `${authServerUrl}/oauth/register`,
+  issuer: publicUrl,
+  authorization_endpoint: `${publicUrl}/authorize`,
+  token_endpoint: `${publicUrl}/token`,
+  registration_endpoint: `${publicUrl}/register`,
+  revocation_endpoint: `${publicUrl}/revoke`,
   response_types_supported: ["code"],
   grant_types_supported: ["authorization_code"],
-  token_endpoint_auth_methods_supported: ["client_secret_post"],
+  token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
   code_challenge_methods_supported: ["S256"],
+  scopes_supported: ["mcp:tools"],
 } satisfies OAuthMetadata;
+
+app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
+  res.json(oauthMetadata);
+});
 
 app.use(
   mcpAuthMetadataRouter({
@@ -125,7 +301,9 @@ app.use(
   }),
 );
 
-// --- Bearer auth middleware -------------------------------------------------
+// ---------------------------------------------------------------------------
+// Bearer auth middleware
+// ---------------------------------------------------------------------------
 
 const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(mcpServerUrl);
 
@@ -135,46 +313,34 @@ const authMiddleware = requireBearerAuth({
   resourceMetadataUrl,
 });
 
-// --- Session management -----------------------------------------------------
+// ---------------------------------------------------------------------------
+// Session management
+// ---------------------------------------------------------------------------
 
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 
-// --- MCP endpoint handlers --------------------------------------------------
+// ---------------------------------------------------------------------------
+// MCP endpoint handlers
+// ---------------------------------------------------------------------------
 
-// POST /mcp  — handles JSON-RPC requests (including initialization)
 app.post("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
 
-  // Reuse an existing session
   if (sessionId && transports[sessionId]) {
     await transports[sessionId].handleRequest(req, res, req.body);
     return;
   }
 
-  // Reject non-initialization requests that reference an unknown session
   if (sessionId && !transports[sessionId]) {
-    res.status(404).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Session not found" },
-      id: null,
-    });
+    res.status(404).json({ jsonrpc: "2.0", error: { code: -32000, message: "Session not found" }, id: null });
     return;
   }
 
-  // New session — only allowed for initialization requests
   if (!isInitializeRequest(req.body)) {
-    res.status(400).json({
-      jsonrpc: "2.0",
-      error: {
-        code: -32000,
-        message: "Bad Request: expected an initialization request",
-      },
-      id: null,
-    });
+    res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "Expected initialization request" }, id: null });
     return;
   }
 
-  // The Bearer token IS the Pictify API key
   const authInfo = req.auth as AuthInfo;
   const apiKey = authInfo.token;
 
@@ -189,9 +355,7 @@ app.post("/", authMiddleware, async (req: Request, res: Response) => {
   transport.onclose = () => {
     if (transport.sessionId) {
       delete transports[transport.sessionId];
-      console.log(
-        `[pictify-mcp-http] Session closed: ${transport.sessionId}`,
-      );
+      console.log(`[pictify-mcp-http] Session closed: ${transport.sessionId}`);
     }
   };
 
@@ -200,46 +364,32 @@ app.post("/", authMiddleware, async (req: Request, res: Response) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-// GET /mcp  — SSE stream for server-initiated messages
 app.get("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
   if (!sessionId || !transports[sessionId]) {
-    res.status(400).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Invalid or missing session" },
-      id: null,
-    });
+    res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "Invalid or missing session" }, id: null });
     return;
   }
-
   await transports[sessionId].handleRequest(req, res);
 });
 
-// DELETE /mcp  — terminates a session
 app.delete("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
-
   if (!sessionId || !transports[sessionId]) {
-    res.status(404).json({
-      jsonrpc: "2.0",
-      error: { code: -32000, message: "Session not found" },
-      id: null,
-    });
+    res.status(404).json({ jsonrpc: "2.0", error: { code: -32000, message: "Session not found" }, id: null });
     return;
   }
-
   await transports[sessionId].close();
   delete transports[sessionId];
   res.status(200).end();
 });
 
 // ---------------------------------------------------------------------------
-// Start the server
+// Start
 // ---------------------------------------------------------------------------
 
 const httpServer = app.listen(port, "0.0.0.0", () => {
-  console.log(`[pictify-mcp-http] Pictify MCP HTTP server listening on http://0.0.0.0:${port}`);
+  console.log(`[pictify-mcp-http] Listening on http://0.0.0.0:${port}`);
   console.log(`[pictify-mcp-http] OAuth metadata at ${resourceMetadataUrl}`);
 });
 
@@ -249,27 +399,9 @@ const httpServer = app.listen(port, "0.0.0.0", () => {
 
 async function shutdown() {
   console.log("[pictify-mcp-http] Shutting down...");
-
-  // Close all active transports
-  const closePromises = Object.values(transports).map(async (transport) => {
-    try {
-      await transport.close();
-    } catch {
-      // ignore errors during shutdown
-    }
-  });
-  await Promise.all(closePromises);
-
-  httpServer.close(() => {
-    console.log("[pictify-mcp-http] Server stopped.");
-    process.exit(0);
-  });
-
-  // Force exit after 5 seconds if graceful shutdown hangs
-  setTimeout(() => {
-    console.error("[pictify-mcp-http] Forced shutdown after timeout.");
-    process.exit(1);
-  }, 5000);
+  await Promise.all(Object.values(transports).map((t) => t.close().catch(() => {})));
+  httpServer.close(() => { process.exit(0); });
+  setTimeout(() => { process.exit(1); }, 5000);
 }
 
 process.on("SIGINT", shutdown);

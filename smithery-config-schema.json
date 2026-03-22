@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "required": ["X-API-Key"],
+  "properties": {
+    "X-API-Key": {
+      "type": "string",
+      "title": "Pictify API Key",
+      "description": "Your API key from pictify.io/dashboard/api-tokens",
+      "x-from": "header"
+    }
+  }
+}

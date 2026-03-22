@@ -307,11 +307,52 @@ app.use(
 
 const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(mcpServerUrl);
 
-const authMiddleware = requireBearerAuth({
+const oauthMiddleware = requireBearerAuth({
   verifier: { verifyAccessToken },
   requiredScopes: [],
   resourceMetadataUrl,
 });
+
+// Flexible auth middleware:
+// 1. If X-API-Key or Bearer token is present, verify directly (Smithery, Claude Code, etc.)
+// 2. If this is an initialize request with no auth, allow through for tool discovery (scanners)
+// 3. Otherwise, fall through to OAuth middleware (Claude.ai)
+const authMiddleware = async (req: Request, res: Response, next: () => void) => {
+  const authHeader = req.headers.authorization;
+  const apiKeyHeader = req.headers["x-api-key"] as string | undefined;
+
+  // Extract token from Authorization header (Bearer prefix) or X-API-Key
+  const token = authHeader?.startsWith("Bearer ")
+    ? authHeader.slice(7)
+    : apiKeyHeader || null;
+
+  if (token) {
+    try {
+      const authInfo = await verifyAccessToken(token);
+      (req as any).auth = authInfo;
+      next();
+      return;
+    } catch {
+      // Token invalid — fall through to OAuth which will return a proper 401
+      // with WWW-Authenticate header pointing to the OAuth metadata
+    }
+  }
+
+  // Allow unauthenticated initialize requests for tool discovery (Smithery scanner, etc.)
+  // Tool calls will fail at the API level without a valid key, but schema discovery works.
+  if (req.method === "POST" && isInitializeRequest(req.body)) {
+    next();
+    return;
+  }
+
+  // For existing sessions without auth, let them through — auth was checked at init time
+  if (req.headers["mcp-session-id"]) {
+    next();
+    return;
+  }
+
+  oauthMiddleware(req, res, next);
+};
 
 // ---------------------------------------------------------------------------
 // Session management
@@ -341,8 +382,8 @@ app.post("/", authMiddleware, async (req: Request, res: Response) => {
     return;
   }
 
-  const authInfo = req.auth as AuthInfo;
-  const apiKey = authInfo.token;
+  const authInfo = (req as any).auth as AuthInfo | undefined;
+  const apiKey = authInfo?.token || "anonymous";
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),

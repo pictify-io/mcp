@@ -1,6 +1,6 @@
 {
   "name": "@pictify/mcp-server",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP server for Pictify - Generate images, GIFs, and PDFs with AI agents",
   "type": "module",
   "main": "build/index.js",

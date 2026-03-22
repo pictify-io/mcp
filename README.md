@@ -16,37 +16,37 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [P
 - **A/B test images** with built-in experiments, traffic splitting, and auto-optimization
 - **Template system** with 50+ expression functions for dynamic content (conditionals, string manipulation, date formatting)
 
-Works with Claude Desktop, Claude Code, Cursor, Windsurf, and any MCP-compatible client.
+Works with Claude (claude.ai + Claude Code + Claude Desktop), Cursor, Windsurf, and any MCP-compatible client.
 
 ## Quick Start
 
-### Option 1: Streamable HTTP with OAuth (Recommended)
+### Prerequisites
 
-No API key needed. The server handles authentication via your browser.
-
-For MCP clients that support Streamable HTTP transport, use this URL:
-
-```
-http://localhost:3000/mcp
-```
-
-Start the server:
-
-```bash
-npx pictify-mcp-http
-```
-
-On the first request, your browser will open to sign in to Pictify. After that, everything works automatically.
-
-### Option 2: Stdio with API Key
-
-For MCP clients that use stdio transport (most desktop apps), you'll need an API key:
+Get your API key:
 
 1. Sign up or log in at [pictify.io](https://pictify.io)
 2. Go to [API Tokens](https://pictify.io/dashboard/api-tokens)
 3. Create a new token and copy it
 
-#### Claude Desktop
+### Claude.ai (Web)
+
+Use the hosted remote server — no install needed:
+
+1. Go to [claude.ai](https://claude.ai) > **Settings** > **Connectors**
+2. Click **Add custom connector**
+3. URL: `https://mcp.pictify.io`
+4. Click **Advanced Settings**
+5. **Client ID**: `pictify`
+6. **Client Secret**: paste your API token
+7. Click **Add**
+
+### Claude Code
+
+```bash
+claude mcp add pictify -e PICTIFY_API_KEY=your_api_key -- npx -y @pictify/mcp-server
+```
+
+### Claude Desktop
 
 Add to your config file:
 
@@ -70,13 +70,7 @@ Add to your config file:
 
 Restart Claude Desktop after saving.
 
-#### Claude Code
-
-```bash
-claude mcp add pictify -e PICTIFY_API_KEY=your_api_key -- npx -y @pictify/mcp-server
-```
-
-#### Cursor
+### Cursor
 
 Add to Cursor's MCP settings (Settings > MCP Servers):
 
@@ -94,7 +88,7 @@ Add to Cursor's MCP settings (Settings > MCP Servers):
 }
 ```
 
-#### Windsurf
+### Windsurf
 
 Add to Windsurf's MCP settings:
 
@@ -111,6 +105,28 @@ Add to Windsurf's MCP settings:
   }
 }
 ```
+
+## Examples
+
+Try these prompts after connecting:
+
+**Create a social media card:**
+> "Create a Twitter card image for my blog post titled 'Getting Started with MCP' with a blue gradient background, 1200x630."
+
+**Screenshot a website:**
+> "Take a screenshot of stripe.com at 1440x900."
+
+**Render a template:**
+> "List my templates and render the blog-header template with title 'Hello World'."
+
+**Batch generate images:**
+> "Use my team-badge template to generate images for these 10 team members: ..."
+
+**Create a PDF invoice:**
+> "Render my invoice template as a PDF with company name 'Acme Inc', amount '$1,500', and date 'March 2026'."
+
+**A/B test an image:**
+> "Create an A/B test experiment with two variants of my hero banner and start routing traffic."
 
 ## Available Tools
 
@@ -177,38 +193,11 @@ Add to Windsurf's MCP settings:
 
 ## Configuration
 
-### Stdio Mode
-
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PICTIFY_API_KEY` | Your Pictify API key (required) | — |
+| `PICTIFY_API_KEY` | Your Pictify API key (required for stdio mode) | — |
 | `PICTIFY_BASE_URL` | Custom API base URL | `https://api.pictify.io` |
 | `PICTIFY_DEBUG` | Enable verbose logging to stderr | `false` |
-
-### HTTP Mode (OAuth)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `PICTIFY_BASE_URL` | Pictify API base URL | `https://api.pictify.io` |
-| `PICTIFY_AUTH_SERVER_URL` | OAuth authorization server URL | `https://api.pictify.io` |
-| `MCP_PORT` | HTTP server port | `3000` |
-
-## Examples
-
-**Create a social media card:**
-> "Create a Twitter card image for my blog post titled 'Getting Started with MCP' with a blue gradient background, 1200x630."
-
-**Screenshot a website:**
-> "Take a screenshot of stripe.com at 1440x900."
-
-**Render a template:**
-> "List my templates and render the blog-header template with title 'Hello World'."
-
-**Batch generate images:**
-> "Use my team-badge template to generate images for these 10 team members: ..."
-
-**A/B test an image:**
-> "Create an A/B test experiment with two variants of my hero banner and start routing traffic."
 
 ## Development
 
@@ -223,12 +212,6 @@ Test with MCP Inspector:
 
 ```bash
 PICTIFY_API_KEY=your_key npm run inspector
-```
-
-Run HTTP mode locally:
-
-```bash
-npm run start:http
 ```
 
 ## License

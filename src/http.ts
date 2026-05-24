@@ -36,15 +36,29 @@ const pkg = JSON.parse(
 
 const baseUrl = process.env.PICTIFY_BASE_URL || "https://api.pictify.io";
 const port = parseInt(process.env.MCP_PORT || "3000", 10);
+// Per-deployment default source slug. Hosted remote (mcp.pictify.io) gets the
+// real slug from ?source=<slug> on /authorize; this fallback covers requests
+// that arrive without a query param. PIC-6.
+const defaultSource = process.env.PICTIFY_MCP_SOURCE || "unknown";
+
+// Allowlist-style sanitizer for source slugs so junk query params don't
+// pollute PostHog properties.
+function sanitizeSource(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const trimmed = String(raw).trim().toLowerCase();
+  if (!trimmed) return null;
+  if (!/^[a-z0-9._-]{1,64}$/.test(trimmed)) return null;
+  return trimmed;
+}
 
 // ---------------------------------------------------------------------------
 // In-memory stores for OAuth codes and clients
 // ---------------------------------------------------------------------------
 
-// Maps authorization code -> { apiToken, codeChallenge, redirectUri, state }
+// Maps authorization code -> { apiToken, codeChallenge, redirectUri, state, source }
 const authCodes = new Map<
   string,
-  { apiToken: string; codeChallenge: string; redirectUri: string; state: string }
+  { apiToken: string; codeChallenge: string; redirectUri: string; state: string; source: string | null }
 >();
 
 // Maps client_id -> { client_secret (= Pictify API token), redirect_uris }
@@ -52,6 +66,30 @@ const clients = new Map<
   string,
   { client_secret: string; redirect_uris: string[]; client_name: string }
 >();
+
+// Maps access_token (= Pictify API token) -> source slug captured at authorize-time.
+// The access token is the user's opaque Pictify API token, so we can't embed
+// attribution metadata on it. This side table lets the session factory look up
+// which directory the connection came from. Auto-expires after 7d.
+const tokenSources = new Map<string, { source: string; capturedAt: number }>();
+const TOKEN_SOURCE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function rememberTokenSource(token: string, source: string | null) {
+  if (!token || !source) return;
+  tokenSources.set(token, { source, capturedAt: Date.now() });
+  setTimeout(() => tokenSources.delete(token), TOKEN_SOURCE_TTL_MS);
+}
+
+function lookupTokenSource(token: string | undefined): string | null {
+  if (!token) return null;
+  const entry = tokenSources.get(token);
+  if (!entry) return null;
+  if (Date.now() - entry.capturedAt > TOKEN_SOURCE_TTL_MS) {
+    tokenSources.delete(token);
+    return null;
+  }
+  return entry.source;
+}
 
 // ---------------------------------------------------------------------------
 // Token verification — validates Bearer tokens against the Pictify backend
@@ -78,8 +116,9 @@ const verifyAccessToken = async (token: string): Promise<AuthInfo> => {
 // MCP server factory — one server per session, each with its own API key
 // ---------------------------------------------------------------------------
 
-function createMcpServer(apiKey: string): McpServer {
-  const client = new PictifyClient(apiKey, baseUrl, pkg.version);
+function createMcpServer(apiKey: string, source: string | null = null): McpServer {
+  const resolvedSource = source ?? defaultSource;
+  const client = new PictifyClient(apiKey, baseUrl, pkg.version, resolvedSource);
   const server = new McpServer({ name: "pictify", version: pkg.version });
 
   registerImageTools(server, client);
@@ -182,6 +221,9 @@ app.get("/authorize", (req: Request, res: Response) => {
   const redirectUri = req.query.redirect_uri as string;
   const state = (req.query.state as string) || "";
   const codeChallenge = (req.query.code_challenge as string) || "";
+  // ?source=<slug> — CMO attaches this to MCP-listing links so we can attribute
+  // signups by directory (mcp.so, glama, smithery, etc.). PIC-6.
+  const source = sanitizeSource(req.query.source as string | undefined);
 
   if (!clientId || !redirectUri) {
     res.status(400).json({ error: "invalid_request", error_description: "client_id and redirect_uri required" });
@@ -196,7 +238,7 @@ app.get("/authorize", (req: Request, res: Response) => {
   // If we have the API token from registration, embed it.
   // If not (pre-configured client), it will come via client_secret in /token.
   const code = randomUUID();
-  authCodes.set(code, { apiToken, codeChallenge, redirectUri, state });
+  authCodes.set(code, { apiToken, codeChallenge, redirectUri, state, source });
 
   // Auto-expire code after 10 minutes
   setTimeout(() => authCodes.delete(code), 600_000);
@@ -254,6 +296,10 @@ app.post("/token", (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid_grant", error_description: "No API token provided. Set your Pictify API token as the OAuth Client Secret." });
     return;
   }
+
+  // Persist the source slug captured at /authorize so subsequent MCP sessions
+  // started with this access_token get attributed correctly. PIC-6.
+  rememberTokenSource(apiToken, codeData.source);
 
   res.json({
     access_token: apiToken,
@@ -385,6 +431,16 @@ app.post("/", authMiddleware, async (req: Request, res: Response) => {
   const authInfo = (req as any).auth as AuthInfo | undefined;
   const apiKey = authInfo?.token || "anonymous";
 
+  // Source resolution priority: explicit header > query param > token-bound
+  // source from OAuth /authorize > deployment default.
+  const headerSource = sanitizeSource(req.headers["x-pictify-mcp-source"] as string | undefined);
+  const querySource = sanitizeSource((req.query as Record<string, unknown>)?.source as string | undefined);
+  const tokenSource = lookupTokenSource(apiKey);
+  const sessionSource = headerSource ?? querySource ?? tokenSource ?? null;
+  if (sessionSource) {
+    console.log(`[pictify-mcp-http] Session source: ${sessionSource}`);
+  }
+
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (id) => {
@@ -400,7 +456,7 @@ app.post("/", authMiddleware, async (req: Request, res: Response) => {
     }
   };
 
-  const server = createMcpServer(apiKey);
+  const server = createMcpServer(apiKey, sessionSource);
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });

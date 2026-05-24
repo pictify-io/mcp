@@ -30,13 +30,20 @@ export class PictifyClient {
   private userAgent: string;
   private maxRetries: number;
   private timeout: number;
+  private source: string | null;
 
-  constructor(apiKey: string, baseUrl = "https://api.pictify.io", version = "0.1.0") {
+  constructor(
+    apiKey: string,
+    baseUrl = "https://api.pictify.io",
+    version = "0.1.0",
+    source: string | null = null,
+  ) {
     this.apiKey = apiKey;
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.userAgent = `@pictify/mcp-server/${version}`;
     this.maxRetries = 3;
     this.timeout = 60_000;
+    this.source = source && source.trim() ? source.trim() : null;
   }
 
   private buildHeaders(method: HttpMethod): Record<string, string> {
@@ -44,6 +51,9 @@ export class PictifyClient {
       Authorization: `Bearer ${this.apiKey}`,
       "User-Agent": this.userAgent,
     };
+    if (this.source) {
+      headers["X-Pictify-MCP-Source"] = this.source;
+    }
     if (method === "POST" || method === "PUT") {
       headers["Content-Type"] = "application/json";
     }

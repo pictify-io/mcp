@@ -42,10 +42,15 @@ if (!apiKey) {
 }
 
 // Initialize client
+// PICTIFY_MCP_SOURCE attributes installs to specific MCP directories (mcp.so,
+// glama, smithery, etc.) — forwarded as X-Pictify-MCP-Source on every API
+// call so the backend can fire the `mcp_install_source` PostHog event. PIC-6.
 const baseUrl = process.env.PICTIFY_BASE_URL || "https://api.pictify.io";
-const client = new PictifyClient(apiKey, baseUrl, pkg.version);
+const source = process.env.PICTIFY_MCP_SOURCE || "unknown";
+const client = new PictifyClient(apiKey, baseUrl, pkg.version, source);
 
 log(`Initializing with base URL: ${baseUrl}`);
+log(`Install source: ${source}`);
 
 // Create MCP server
 const server = new McpServer({

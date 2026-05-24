@@ -198,6 +198,39 @@ Try these prompts after connecting:
 | `PICTIFY_API_KEY` | Your Pictify API key (required for stdio mode) | — |
 | `PICTIFY_BASE_URL` | Custom API base URL | `https://api.pictify.io` |
 | `PICTIFY_DEBUG` | Enable verbose logging to stderr | `false` |
+| `PICTIFY_MCP_SOURCE` | Slug identifying where this MCP server was installed from (e.g. `mcp.so`, `glama`, `smithery`, `claude_desktop_gallery`, `github`). Sent as `X-Pictify-MCP-Source` on every API call so Pictify can attribute installs by directory. | `unknown` |
+
+### Install attribution
+
+When you submit `@pictify/mcp-server` to an MCP directory, set
+`PICTIFY_MCP_SOURCE` in the install snippet so we can attribute signups
+to that listing. Example for the mcp.so directory entry:
+
+```json
+{
+  "mcpServers": {
+    "pictify": {
+      "command": "npx",
+      "args": ["-y", "@pictify/mcp-server"],
+      "env": {
+        "PICTIFY_API_KEY": "your_api_key",
+        "PICTIFY_MCP_SOURCE": "mcp.so"
+      }
+    }
+  }
+}
+```
+
+For the hosted remote (`https://mcp.pictify.io`), pass the slug as a
+query param on the connector URL instead — the server persists it on
+the OAuth session:
+
+```
+https://mcp.pictify.io?source=mcp.so
+```
+
+Accepted slugs: lowercase letters, digits, `.`, `-`, `_`, up to 64
+characters. Anything else is dropped to `unknown`.
 
 ## Development
 

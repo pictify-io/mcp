@@ -1,0 +1,50 @@
+name: Protected Branch Guard
+
+# Belt-and-braces enforcement. If GitHub branch protection is ever relaxed,
+# this workflow fails any push to master/main whose head commit was not
+# introduced via a merge commit from a pull request.
+#
+# Source: PIC-37 plan §1.3 (Phase 1 — PIC-38).
+
+on:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Refuse non-PR pushes to protected branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "Validating push to $BRANCH ($SHA)…"
+
+          # The push event payload tells us if this came from a PR merge.
+          # GitHub does not natively flag direct pushes vs merge commits, so we
+          # ask the API: is this commit associated with a closed/merged PR?
+          PR_COUNT=$(gh api -H "Accept: application/vnd.github+json" \
+            "repos/${{ github.repository }}/commits/$SHA/pulls" \
+            --jq '[.[] | select(.merged_at != null)] | length')
+
+          if [ "$PR_COUNT" -lt 1 ]; then
+            echo "::error::Push to protected branch $BRANCH did not come from a merged pull request."
+            echo "Branch protection rules require PRs. See AGENTS.md > Git workflow (hard rules)."
+            exit 1
+          fi
+
+          echo "OK: commit $SHA was introduced via a merged PR."

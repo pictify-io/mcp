@@ -1,0 +1,5 @@
+# Pictify CODEOWNERS — every file requires review from a code owner.
+# Source: PIC-37 plan, Phase 1 (PIC-38).
+# Expand per-path when more reviewers exist.
+
+* @suyash-thakur

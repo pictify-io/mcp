@@ -1,0 +1,25 @@
+#!/usr/bin/env sh
+# scripts/githooks/pre-push
+#
+# Refuses direct pushes to protected branches (master/main). Forces agents
+# (and humans) to go through a pull request.
+#
+# Install with: git config core.hooksPath scripts/githooks
+# Source: PIC-37 plan §1.2 (Phase 1 — PIC-38).
+
+protected="refs/heads/master refs/heads/main"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  for p in $protected; do
+    if [ "$remote_ref" = "$p" ]; then
+      echo "ERROR: direct push to protected branch '$remote_ref' is forbidden." >&2
+      echo "" >&2
+      echo "Open a PR from a feature branch instead." >&2
+      echo "Branch naming: agent/<agent-name-key>/<issue-identifier>-<slug>" >&2
+      echo "See AGENTS.md > Git workflow (hard rules) for full process." >&2
+      exit 1
+    fi
+  done
+done
+
+exit 0

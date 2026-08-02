@@ -19,6 +19,13 @@ function parseErrorField(body: Record<string, unknown>, field: string): string |
   return typeof value === "string" ? value : undefined;
 }
 
+function parseErrorStrings(body: Record<string, unknown>): string | undefined {
+  if (Array.isArray(body.errors) && body.errors.every((e) => typeof e === "string")) {
+    return (body.errors as string[]).join("; ");
+  }
+  return undefined;
+}
+
 function parseErrorArray(body: Record<string, unknown>): Array<{ field: string; message: string; code: string }> | undefined {
   if (!Array.isArray(body.errors)) return undefined;
   return body.errors as Array<{ field: string; message: string; code: string }>;
@@ -64,7 +71,9 @@ export class PictifyClient {
     method: HttpMethod,
     path: string,
     body?: unknown,
+    options?: { timeoutMs?: number },
   ): Promise<T> {
+    const timeoutMs = options?.timeoutMs ?? this.timeout;
     let lastError: Error = new Error("Request failed after retries");
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
@@ -74,7 +83,7 @@ export class PictifyClient {
       }
 
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), this.timeout);
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
         const res = await fetch(`${this.baseUrl}${path}`, {
@@ -92,9 +101,13 @@ export class PictifyClient {
           if (res.status < 500) {
             throw new PictifyApiError(
               res.status,
-              parseErrorField(errorBody, "type") ?? "unknown",
+              parseErrorField(errorBody, "code") ?? parseErrorField(errorBody, "type") ?? "unknown",
               parseErrorField(errorBody, "title") ?? res.statusText,
-              parseErrorField(errorBody, "detail") ?? "Request failed",
+              parseErrorField(errorBody, "message") ??
+                parseErrorField(errorBody, "error") ??
+                parseErrorField(errorBody, "detail") ??
+                parseErrorStrings(errorBody) ??
+                "Request failed",
               parseErrorArray(errorBody),
               res.headers.get("Retry-After")
                 ? parseInt(res.headers.get("Retry-After")!, 10)
@@ -104,9 +117,12 @@ export class PictifyClient {
 
           lastError = new PictifyApiError(
             res.status,
-            parseErrorField(errorBody, "type") ?? "server_error",
+            parseErrorField(errorBody, "code") ?? parseErrorField(errorBody, "type") ?? "server_error",
             parseErrorField(errorBody, "title") ?? "Server Error",
-            parseErrorField(errorBody, "detail") ?? `Server returned ${res.status}`,
+            parseErrorField(errorBody, "message") ??
+              parseErrorField(errorBody, "error") ??
+              parseErrorField(errorBody, "detail") ??
+              `Server returned ${res.status}`,
           );
           continue;
         }
@@ -121,7 +137,7 @@ export class PictifyClient {
             408,
             "timeout",
             "Request Timeout",
-            `The request timed out after ${this.timeout / 1000} seconds`,
+            `The request timed out after ${timeoutMs / 1000} seconds`,
           );
         }
         if (attempt === this.maxRetries) throw err;
@@ -143,8 +159,8 @@ export class PictifyClient {
     return this.request("GET", `${path}${qs}`);
   }
 
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return this.request("POST", path, body);
+  post<T>(path: string, body?: unknown, options?: { timeoutMs?: number }): Promise<T> {
+    return this.request("POST", path, body, options);
   }
 
   put<T>(path: string, body?: unknown): Promise<T> {

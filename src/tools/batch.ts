@@ -6,7 +6,7 @@ import { formatError } from "../utils.js";
 export function registerBatchTools(server: McpServer, client: PictifyClient) {
   server.tool(
     "pictify_batch_render",
-    "Start a batch render job to generate multiple images from a single template with different variable sets. " +
+    "Start a batch render job to generate multiple images from a single template — from inline variable sets, or from a hosted CSV where every row becomes a render. " +
       "Each variable set produces a separate image. Supports up to 100 items per batch (plan-dependent). " +
       "Common use cases: generating personalized social cards for all team members, " +
       "product images for an entire catalog, event badges for all attendees, " +
@@ -24,9 +24,27 @@ export function registerBatchTools(server: McpServer, client: PictifyClient) {
         .array(z.record(z.unknown()))
         .min(1)
         .max(100)
+        .optional()
         .describe(
           "Array of variable sets (1-100 items). Each item produces a separate image. " +
-            "Example: [{ name: 'Alice', role: 'CEO' }, { name: 'Bob', role: 'CTO' }] generates 2 images.",
+            "Example: [{ name: 'Alice', role: 'CEO' }, { name: 'Bob', role: 'CTO' }] generates 2 images. " +
+            "Provide EITHER variableSets OR csvUrl, not both.",
+        ),
+      csvUrl: z
+        .string()
+        .url()
+        .optional()
+        .describe(
+          "CSV mode: URL of a publicly fetchable CSV file — every row becomes one render. " +
+            "Use with 'mappings' to map CSV columns onto template variables. " +
+            "Provide EITHER csvUrl OR variableSets, not both.",
+        ),
+      mappings: z
+        .record(z.string())
+        .optional()
+        .describe(
+          "CSV mode: { csv_column: templateVariable } pairs, e.g. { attendee_name: 'name' }. " +
+            "Required when csvUrl is provided.",
         ),
       format: z
         .enum(["png", "jpeg", "webp"])
@@ -63,14 +81,27 @@ export function registerBatchTools(server: McpServer, client: PictifyClient) {
             "Each batch item will produce one image per layout (2D results).",
         ),
     },
-    async ({ templateId, variableSets, format, quality, concurrency, layout, layouts }) => {
+    async ({ templateId, variableSets, csvUrl, mappings, format, quality, concurrency, layout, layouts }) => {
       try {
+        if (!variableSets && !csvUrl) {
+          throw new Error("Provide either variableSets (rows mode) or csvUrl (CSV mode).");
+        }
+        if (variableSets && csvUrl) {
+          throw new Error("variableSets and csvUrl are mutually exclusive — pick one input mode.");
+        }
+        if (csvUrl && !mappings) {
+          throw new Error("CSV mode needs 'mappings' ({ csv_column: templateVariable }).");
+        }
         const body: Record<string, unknown> = {
-          variableSets,
           format,
           quality,
           concurrency,
         };
+        if (variableSets) body.variableSets = variableSets;
+        if (csvUrl) {
+          body.csvUrl = csvUrl;
+          body.mappings = mappings;
+        }
         if (layouts && layouts.length > 0) {
           body.layouts = layouts;
         } else if (layout) {

@@ -13,7 +13,6 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [P
 - **Create animated GIFs** from CSS animations or by recording live web pages
 - **Render PDFs** from templates — invoices, certificates, reports, shipping labels
 - **Batch generate** up to 100 personalized images in one request (team badges, event passes, product catalogs)
-- **A/B test images** with built-in experiments, traffic splitting, and auto-optimization
 - **Template system** with 50+ expression functions for dynamic content (conditionals, string manipulation, date formatting)
 
 Works with Claude (claude.ai + Claude Code + Claude Desktop), Cursor, Windsurf, and any MCP-compatible client.
@@ -125,9 +124,6 @@ Try these prompts after connecting:
 **Create a PDF invoice:**
 > "Render my invoice template as a PDF with company name 'Acme Inc', amount '$1,500', and date 'March 2026'."
 
-**A/B test an image:**
-> "Create an A/B test experiment with two variants of my hero banner and start routing traffic."
-
 ## Available Tools
 
 ### Image Generation
@@ -175,21 +171,6 @@ Try these prompts after connecting:
 | `pictify_batch_render` | Start batch render job (up to 100 items, async) |
 | `pictify_get_batch_results` | Check batch job status and get result URLs |
 | `pictify_cancel_batch` | Cancel a running batch job |
-
-### A/B Testing & Experiments
-
-| Tool | Description |
-|------|-------------|
-| `pictify_list_experiments` | List experiments (A/B tests, smart links, scheduled) |
-| `pictify_create_experiment` | Create an experiment with variants and traffic weights |
-| `pictify_get_experiment` | Get experiment details and per-variant performance |
-| `pictify_get_experiment_quota` | Check experiment usage and plan limits |
-| `pictify_update_experiment` | Update experiment config (field access depends on status) |
-| `pictify_delete_experiment` | Delete an experiment |
-| `pictify_start_experiment` | Start routing traffic to variants |
-| `pictify_pause_experiment` | Pause traffic routing (data preserved) |
-| `pictify_complete_experiment` | Declare a winner and route all traffic to it |
-| `pictify_track_experiment_events` | Track impressions, clicks, and conversions |
 
 ## Configuration
 

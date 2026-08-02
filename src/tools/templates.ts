@@ -384,7 +384,7 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
   server.tool(
     "pictify_delete_template",
     "Permanently delete a template. This action cannot be undone. " +
-      "WARNING: Any batch jobs, experiments, or bindings using this template will stop working.",
+      "WARNING: Any batch jobs or bindings using this template will stop working.",
     {
       templateId: z.string().describe("The template UID to delete"),
     },

@@ -27,7 +27,11 @@ function parseErrorStrings(body: Record<string, unknown>): string | undefined {
 }
 
 function parseErrorArray(body: Record<string, unknown>): Array<{ field: string; message: string; code: string }> | undefined {
-  if (!Array.isArray(body.errors)) return undefined;
+  if (!Array.isArray(body.errors) || body.errors.length === 0) return undefined;
+  // Only OBJECT-shaped validation errors belong here. The video compile gate
+  // sends errors as plain strings — those go through parseErrorStrings into
+  // the detail; casting them here printed "undefined: undefined" per string.
+  if (!body.errors.every((e) => e && typeof e === "object" && !Array.isArray(e))) return undefined;
   return body.errors as Array<{ field: string; message: string; code: string }>;
 }
 

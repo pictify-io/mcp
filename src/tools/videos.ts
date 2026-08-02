@@ -11,8 +11,15 @@ import { formatError } from "../utils.js";
  * full video takes minutes, so the render and generate tools override the
  * client's default 60s timeout rather than aborting every real render.
  */
-const RENDER_TIMEOUT_MS = 5 * 60 * 1000;
-const GENERATE_TIMEOUT_MS = 3 * 60 * 1000;
+/*
+ * Headroom over the backend's own caps, not equal to them: the render cap is
+ * 5m server-side (+30s socket grace), and generation is a 5m cap PLUS an
+ * awaited poster render — aborting at the exact server cap turns a slow
+ * SUCCESS (billed, saved) into a client-side 408 where the agent never
+ * learns the template uid.
+ */
+const RENDER_TIMEOUT_MS = 6 * 60 * 1000;
+const GENERATE_TIMEOUT_MS = 11 * 60 * 1000;
 
 export function registerVideoTools(server: McpServer, client: PictifyClient) {
   server.tool(
@@ -100,7 +107,8 @@ export function registerVideoTools(server: McpServer, client: PictifyClient) {
     "Render a video template to an MP4 video or an animated GIF, with variable substitutions. " +
       "Common use cases: personalized video messages, social video posts, animated certificates, " +
       "product announcement clips, and GIFs for places an MP4 cannot autoplay (chat, email, READMEs). " +
-      "GIF output is palette-optimised and capped at 15fps / 720px wide so files stay shareable. " +
+      "GIF output: timeline templates are palette-converted and capped at 15fps / 720px wide; " +
+      "code (tsx) templates encode GIF natively at half the composition frame rate with no width cap. " +
       "WORKFLOW: pictify_list_video_templates → pictify_get_video_template_variables → this tool. " +
       "The render takes up to a few minutes; this tool waits and returns the hosted file URL. " +
       "Each render consumes one video credit.",

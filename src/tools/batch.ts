@@ -43,7 +43,8 @@ export function registerBatchTools(server: McpServer, client: PictifyClient) {
         .record(z.string())
         .optional()
         .describe(
-          "CSV mode: { csv_column: templateVariable } pairs, e.g. { attendee_name: 'name' }. " +
+          "CSV mode: { templateVariable: 'CSV Column' } pairs — the KEY is the template variable, " +
+            "the VALUE is the CSV column name, e.g. { name: 'attendee_name' }. " +
             "Required when csvUrl is provided.",
         ),
       format: z
@@ -90,7 +91,7 @@ export function registerBatchTools(server: McpServer, client: PictifyClient) {
           throw new Error("variableSets and csvUrl are mutually exclusive — pick one input mode.");
         }
         if (csvUrl && !mappings) {
-          throw new Error("CSV mode needs 'mappings' ({ csv_column: templateVariable }).");
+          throw new Error("CSV mode needs 'mappings' ({ templateVariable: 'CSV Column' }).");
         }
         const body: Record<string, unknown> = {
           format,

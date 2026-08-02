@@ -24,6 +24,7 @@ import { registerPdfTools } from "./tools/pdfs.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerBatchTools } from "./tools/batch.js";
 import { registerExperimentTools } from "./tools/experiments.js";
+import { registerVideoTools } from "./tools/videos.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -127,6 +128,7 @@ function createMcpServer(apiKey: string, source: string | null = null): McpServe
   registerTemplateTools(server, client);
   registerBatchTools(server, client);
   registerExperimentTools(server, client);
+  registerVideoTools(server, client);
 
   return server;
 }

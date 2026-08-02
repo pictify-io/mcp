@@ -12,6 +12,7 @@ import { registerPdfTools } from "./tools/pdfs.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerBatchTools } from "./tools/batch.js";
 import { registerExperimentTools } from "./tools/experiments.js";
+import { registerVideoTools } from "./tools/videos.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(
@@ -65,6 +66,7 @@ registerPdfTools(server, client);
 registerTemplateTools(server, client);
 registerBatchTools(server, client);
 registerExperimentTools(server, client);
+registerVideoTools(server, client);
 
 log("All tools registered");
 

@@ -146,6 +146,88 @@ export function registerVideoTools(server: McpServer, client: PictifyClient) {
   );
 
   server.tool(
+    "pictify_create_video_template",
+    "Upload a Remotion scene YOU wrote as a new video template. Use when you want full creative " +
+      "control over the composition — write the TSX yourself instead of delegating the design to " +
+      "pictify_generate_video_template. The source passes a compile gate before anything is saved: " +
+      "on failure you get the compiler errors back and NO template is created, so fix the code and " +
+      "call again. " +
+      "SCENE RULES (violations fail the compile gate or the render): " +
+      "(1) Single file. It must contain `export const schema = z.object({...})` AND `export default` " +
+      "a React function component typed with the schema's props. Every schema field must be flat, " +
+      "carry .default(...), and use .describe('...') — fields become the template's editable variables. " +
+      "(2) Imports ONLY from 'remotion', 'react' and 'zod'. No other packages, no relative imports. " +
+      "(3) ALL animation via useCurrentFrame() + useVideoConfig() with interpolate() and spring(). " +
+      "CSS transitions/animations and Tailwind are forbidden. Always clamp: " +
+      "{ extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }. " +
+      "(4) Layout with <AbsoluteFill>, inline styles, system font stacks. If you use <Sequence>, it " +
+      "MUST carry layout=\"none\" and integer literals for from/durationInFrames. " +
+      "(5) No external assets: no fetch, no hard-coded media URLs. Media only via optional string " +
+      "props rendered with <Img> from 'remotion'. Use remotion's random(seed), never Math.random(). " +
+      "(6) Never reference require, eval, dynamic import(), fs, child_process, or the word 'process' " +
+      "— not even in comments or identifiers.",
+    {
+      name: z.string().min(1).max(200).describe("Template name shown in the dashboard"),
+      tsx: z
+        .string()
+        .min(1)
+        .describe("The complete single-file Remotion scene source, following the rules above"),
+      width: z.number().min(16).max(4096).default(1080).describe("Canvas width in pixels"),
+      height: z.number().min(16).max(4096).default(1080).describe("Canvas height in pixels"),
+      fps: z.number().min(1).max(60).default(30).describe("Frames per second"),
+      durationSeconds: z
+        .number()
+        .min(1)
+        .max(60)
+        .default(8)
+        .describe("Video length in seconds (1-60)"),
+    },
+    async ({ name, tsx, width, height, fps, durationSeconds }) => {
+      try {
+        const result = await client.post<{
+          template: {
+            uid: string;
+            name: string;
+            variableDefinitions?: Array<{ name: string }>;
+          };
+        }>(
+          "/video/templates",
+          {
+            name,
+            kind: "tsx",
+            tsx,
+            width,
+            height,
+            fps,
+            durationInFrames: Math.round(durationSeconds * fps),
+            status: "draft",
+          },
+          // The compile gate bundles the scene with webpack — comfortably
+          // slower than the 60s default on a cold cache.
+          { timeoutMs: 3 * 60 * 1000 },
+        );
+        const variables = (result.template?.variableDefinitions || [])
+          .map((v) => v.name)
+          .join(", ");
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `Video template created and compiled.\n\nUID: ${result.template?.uid}\nName: ${result.template?.name}` +
+                (variables ? `\nEditable variables (from your schema): ${variables}` : "") +
+                `\n\nRender it with pictify_render_video (mp4 or gif), or open it in the studio to refine. ` +
+                `A poster thumbnail is rendered automatically in the background.`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  server.tool(
     "pictify_generate_video_template",
     "Generate a new video template from a text prompt using AI. The service designs a motion " +
       "brief (palette, beats, typography), writes the scene as code, compiles it, renders preview " +

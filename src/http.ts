@@ -380,7 +380,7 @@ app.get("/server-card", (_req: Request, res: Response) => {
     $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
     name: "io.github.pictify-io/mcp",
     version: pkg.version,
-    description: "Generate images, GIFs, and PDFs from HTML, URLs, or templates — from your AI agent.",
+    description: "Generate images, GIFs, videos, and PDFs from HTML, URLs, or templates — from your AI agent.",
     title: "Pictify MCP Server",
     websiteUrl: "https://pictify.io",
     repository: {

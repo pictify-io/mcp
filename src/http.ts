@@ -9,7 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
-import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { isInitializeRequest, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { Request, Response } from "express";
@@ -366,6 +366,36 @@ app.use(
     resourceName: "Pictify MCP Server",
   }),
 );
+
+// ---------------------------------------------------------------------------
+// MCP Server Card (SEP-2127, still Draft — schema.ts in
+// modelcontextprotocol/experimental-ext-server-card is the source of truth).
+// Recommended location per spec is `<streamable-http-url>/server-card`.
+// Server Cards intentionally don't enumerate tools/capabilities — that stays
+// runtime-discoverable via the protocol's own list operations.
+// ---------------------------------------------------------------------------
+
+app.get("/server-card", (_req: Request, res: Response) => {
+  res.json({
+    $schema: "https://static.modelcontextprotocol.io/schemas/v1/server-card.schema.json",
+    name: "io.github.pictify-io/mcp",
+    version: pkg.version,
+    description: "Generate images, GIFs, and PDFs from HTML, URLs, or templates — from your AI agent.",
+    title: "Pictify MCP Server",
+    websiteUrl: "https://pictify.io",
+    repository: {
+      url: "https://github.com/pictify-io/mcp",
+      source: "github",
+    },
+    remotes: [
+      {
+        type: "streamable-http",
+        url: publicUrl,
+        supportedProtocolVersions: SUPPORTED_PROTOCOL_VERSIONS,
+      },
+    ],
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Bearer auth middleware

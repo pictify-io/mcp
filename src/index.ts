@@ -2,10 +2,12 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { instrument } from "@posthog/mcp";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { PictifyClient } from "./api-client.js";
+import { createAnalyticsClient, identityResolver, shutdownAnalytics } from "./analytics.js";
 import { registerImageTools } from "./tools/images.js";
 import { registerGifTools } from "./tools/gifs.js";
 import { registerPdfTools } from "./tools/pdfs.js";
@@ -58,6 +60,21 @@ const server = new McpServer({
   version: pkg.version,
 });
 
+// PostHog MCP analytics — opt out with PICTIFY_ANALYTICS_DISABLED=1.
+// logger routes SDK warnings to stderr; stdout is reserved for the protocol.
+const posthog = createAnalyticsClient();
+if (posthog) {
+  instrument(server, posthog, {
+    identify: identityResolver(apiKey, baseUrl),
+    logger: (message) => log(`[analytics] ${message}`),
+    eventProperties: () => ({ mcp_source: source, transport: "stdio" }),
+    // Injects a `context` parameter on every tool so agents state their intent
+    // — captured as $mcp_intent and clustered in PostHog MCP Analytics.
+    context: true,
+  });
+  log("PostHog MCP analytics enabled");
+}
+
 // Register all tools
 registerImageTools(server, client);
 registerGifTools(server, client);
@@ -80,13 +97,12 @@ main().catch((error) => {
   process.exit(1);
 });
 
-// Graceful shutdown
-process.on("SIGINT", () => {
+// Graceful shutdown — flush queued analytics events before exiting.
+async function shutdown() {
   log("Shutting down...");
+  await shutdownAnalytics(posthog);
   process.exit(0);
-});
+}
 
-process.on("SIGTERM", () => {
-  log("Shutting down...");
-  process.exit(0);
-});
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);

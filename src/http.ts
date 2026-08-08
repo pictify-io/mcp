@@ -17,7 +17,9 @@ import express from "express";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
+import { instrument } from "@posthog/mcp";
 import { PictifyClient } from "./api-client.js";
+import { createAnalyticsClient, identityResolver, shutdownAnalytics } from "./analytics.js";
 import { registerImageTools } from "./tools/images.js";
 import { registerGifTools } from "./tools/gifs.js";
 import { registerPdfTools } from "./tools/pdfs.js";
@@ -116,10 +118,28 @@ const verifyAccessToken = async (token: string): Promise<AuthInfo> => {
 // MCP server factory — one server per session, each with its own API key
 // ---------------------------------------------------------------------------
 
+// Shared posthog-node client for all sessions; each per-session McpServer is
+// instrumented separately so events attribute to that session's user.
+const posthog = createAnalyticsClient();
+if (posthog) {
+  console.log("[pictify-mcp-http] PostHog MCP analytics enabled");
+}
+
 function createMcpServer(apiKey: string, source: string | null = null): McpServer {
   const resolvedSource = source ?? defaultSource;
   const client = new PictifyClient(apiKey, baseUrl, pkg.version, resolvedSource);
   const server = new McpServer({ name: "pictify", version: pkg.version });
+
+  if (posthog) {
+    instrument(server, posthog, {
+      identify: identityResolver(apiKey, baseUrl),
+      logger: (message) => console.log(`[pictify-mcp-http] [analytics] ${message}`),
+      eventProperties: () => ({ mcp_source: resolvedSource, transport: "http" }),
+      // Injects a `context` parameter on every tool so agents state their intent
+      // — captured as $mcp_intent and clustered in PostHog MCP Analytics.
+      context: true,
+    });
+  }
 
   registerImageTools(server, client);
   registerGifTools(server, client);
@@ -497,6 +517,7 @@ const httpServer = app.listen(port, "0.0.0.0", () => {
 async function shutdown() {
   console.log("[pictify-mcp-http] Shutting down...");
   await Promise.all(Object.values(transports).map((t) => t.close().catch(() => {})));
+  await shutdownAnalytics(posthog);
   httpServer.close(() => { process.exit(0); });
   setTimeout(() => { process.exit(1); }, 5000);
 }

@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/@pictify/mcp-server.svg)](https://www.npmjs.com/package/@pictify/mcp-server)
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [Pictify](https://pictify.io) — generate images, GIFs, and PDFs from AI agents like Claude, Cursor, and Windsurf.
+An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [Pictify](https://pictify.io) — generate images, GIFs, videos, and PDFs from AI agents like Claude, Cursor, and Windsurf.
 
 **One-line install. No code required.** Ask your AI assistant to create OG images, social media cards, screenshots, animated GIFs, PDF invoices, certificates, and more — all from natural language.
 
@@ -11,6 +11,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [P
 
 - **Generate images** from HTML/CSS, URLs, or reusable templates (OG images, Twitter cards, banners, product screenshots)
 - **Create animated GIFs** from CSS animations or by recording live web pages
+- **Render videos** from templates, including agent-authored Remotion scenes
 - **Render PDFs** from templates — invoices, certificates, reports, shipping labels
 - **Batch generate** up to 100 personalized images in one request (team badges, event passes, product catalogs)
 - **Template system** with 50+ expression functions for dynamic content (conditionals, string manipulation, date formatting)

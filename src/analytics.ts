@@ -1,5 +1,5 @@
 import { PostHog } from "posthog-node";
-import type { UserIdentity } from "@posthog/mcp";
+import type { BeforeSendFn, UserIdentity } from "@posthog/mcp";
 
 // Public project API key (phc_ keys are write-only and safe to embed).
 // Same PostHog project the Pictify backend reports to, so MCP sessions land
@@ -28,6 +28,39 @@ export function createAnalyticsClient(): PostHog | null {
     flushInterval: 5000,
   });
 }
+
+/**
+ * Expected, caller-actionable failures that must not reach error tracking as
+ * exceptions. @posthog/mcp fans every errored tool call into a `$exception`
+ * sibling event, which put scanner probes and users' auth mistakes in error
+ * tracking as if they were server defects. Dropping only the `$exception`
+ * sibling keeps the failed `$mcp_tool_call` event (with `$mcp_is_error`), so
+ * failure rates stay fully measurable in MCP analytics.
+ */
+const EXPECTED_ERROR_PATTERNS: RegExp[] = [
+  // Protocol-level unknown method/tool (-32601/-32602): directory scanners
+  // probing auth with synthetic tool names (e.g. verifymcp's
+  // __verifymcp_auth_probe_*__) and confused clients. Responding with this
+  // error IS the correct server behavior.
+  /MCP error -3260[12]/,
+  // Pictify API rejections the caller must fix themselves, as formatted by
+  // formatError in utils.ts: invalid or expired key (401), quota exhausted
+  // (402), unverified email or plan-gated feature (403), rate limit (429).
+  /^Error \((401|402|403|429)\):/m,
+];
+
+/**
+ * `beforeSend` hook for @posthog/mcp: drop `$exception` events whose message
+ * matches an expected-failure pattern; pass everything else through untouched.
+ */
+export const dropExpectedExceptions: BeforeSendFn = (event) => {
+  if (event.event !== "$exception") return event;
+  const list = event.properties?.["$exception_list"];
+  const first = Array.isArray(list) ? (list[0] as { value?: unknown } | undefined) : undefined;
+  const value = String(first?.value ?? "");
+  if (EXPECTED_ERROR_PATTERNS.some((pattern) => pattern.test(value))) return null;
+  return event;
+};
 
 export async function shutdownAnalytics(posthog: PostHog | null): Promise<void> {
   if (!posthog) return;

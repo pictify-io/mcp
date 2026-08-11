@@ -19,7 +19,12 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { instrument } from "@posthog/mcp";
 import { PictifyClient } from "./api-client.js";
-import { createAnalyticsClient, identityResolver, shutdownAnalytics } from "./analytics.js";
+import {
+  createAnalyticsClient,
+  dropExpectedExceptions,
+  identityResolver,
+  shutdownAnalytics,
+} from "./analytics.js";
 import { registerImageTools } from "./tools/images.js";
 import { registerGifTools } from "./tools/gifs.js";
 import { registerPdfTools } from "./tools/pdfs.js";
@@ -138,6 +143,9 @@ function createMcpServer(apiKey: string, source: string | null = null): McpServe
       // Injects a `context` parameter on every tool so agents state their intent
       // — captured as $mcp_intent and clustered in PostHog MCP Analytics.
       context: true,
+      // Keep expected failures (auth mistakes, scanner probes) out of error
+      // tracking; the failed tool_call events still go through.
+      beforeSend: dropExpectedExceptions,
     });
   }
 

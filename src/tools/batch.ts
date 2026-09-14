@@ -1,12 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PictifyClient } from "../api-client.js";
-import { formatError } from "../utils.js";
+import { formatError, ToolInputError } from "../utils.js";
 
 export function registerBatchTools(server: McpServer, client: PictifyClient) {
   server.tool(
     "pictify_batch_render",
     "Start a batch render job to generate multiple images from a single template — from inline variable sets, or from a hosted CSV where every row becomes a render. " +
+      "REQUIRED: exactly one of variableSets (inline rows) or csvUrl (+ mappings). A call with neither is rejected. " +
       "Each variable set produces a separate image. Supports up to 100 items per batch (plan-dependent). " +
       "Common use cases: generating personalized social cards for all team members, " +
       "product images for an entire catalog, event badges for all attendees, " +
@@ -85,13 +86,16 @@ export function registerBatchTools(server: McpServer, client: PictifyClient) {
     async ({ templateId, variableSets, csvUrl, mappings, format, quality, concurrency, layout, layouts }) => {
       try {
         if (!variableSets && !csvUrl) {
-          throw new Error("Provide either variableSets (rows mode) or csvUrl (CSV mode).");
+          throw new ToolInputError(
+            "Provide either variableSets (rows mode: an array of { variable: value } objects) or csvUrl (CSV mode, with mappings). " +
+              "Call pictify_get_template_variables first to see which variables the template expects.",
+          );
         }
         if (variableSets && csvUrl) {
-          throw new Error("variableSets and csvUrl are mutually exclusive — pick one input mode.");
+          throw new ToolInputError("variableSets and csvUrl are mutually exclusive — pick one input mode.");
         }
         if (csvUrl && !mappings) {
-          throw new Error("CSV mode needs 'mappings' ({ templateVariable: 'CSV Column' }).");
+          throw new ToolInputError("CSV mode needs 'mappings' ({ templateVariable: 'CSV Column' }).");
         }
         const body: Record<string, unknown> = {
           format,

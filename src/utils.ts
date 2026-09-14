@@ -1,5 +1,18 @@
 import { PictifyApiError } from "./api-client.js";
 
+/**
+ * A tool was called with arguments the schema cannot express as invalid
+ * (e.g. "exactly one of A or B"). It is the caller's mistake, not a server
+ * defect: formatError renders it as "Invalid input:" so the agent can correct
+ * the call, and analytics.ts keeps it out of error tracking.
+ */
+export class ToolInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolInputError";
+  }
+}
+
 export function formatError(error: unknown): {
   content: Array<{ type: "text"; text: string }>;
   isError: true;
@@ -32,6 +45,13 @@ export function formatError(error: unknown): {
 
     return {
       content: [{ type: "text", text: message }],
+      isError: true,
+    };
+  }
+
+  if (error instanceof ToolInputError) {
+    return {
+      content: [{ type: "text", text: `Invalid input: ${error.message}` }],
       isError: true,
     };
   }

@@ -47,6 +47,10 @@ const EXPECTED_ERROR_PATTERNS: RegExp[] = [
   // formatError in utils.ts: invalid or expired key (401), quota exhausted
   // (402), unverified email or plan-gated feature (403), rate limit (429).
   /^Error \((401|402|403|429)\):/m,
+  // Argument mistakes the schema cannot express (ToolInputError in utils.ts),
+  // e.g. pictify_batch_render called with neither variableSets nor csvUrl.
+  // The agent reads the message and corrects the call.
+  /^Invalid input:/m,
 ];
 
 /**

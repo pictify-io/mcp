@@ -10,7 +10,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [P
 ### What can it do?
 
 - **Generate images** from HTML/CSS, URLs, or reusable templates (OG images, Twitter cards, banners, product screenshots)
-- **Create animated GIFs** from CSS animations or by recording live web pages
+- **Create animated GIFs** by rendering a Remotion video template to GIF
 - **Render videos** from templates, including agent-authored Remotion scenes
 - **Render PDFs** from templates — invoices, certificates, reports, shipping labels
 - **Batch generate** up to 100 personalized images in one request (team badges, event passes, product catalogs)
@@ -133,16 +133,17 @@ Try these prompts after connecting:
 | Tool | Description |
 |------|-------------|
 | `pictify_create_image` | Generate an image from HTML/CSS, a URL screenshot, or a template |
-| `pictify_create_canvas_image` | Generate an image from FabricJS canvas JSON data |
 | `pictify_list_images` | List previously generated images |
 | `pictify_get_image` | Get details of a specific image by ID |
 
-### GIF Creation
+### GIFs
+
+GIFs are produced through the video pipeline: render a Remotion video template
+with `format: "gif"` using `pictify_render_video`. The tools here read GIFs your
+account already has.
 
 | Tool | Description |
 |------|-------------|
-| `pictify_create_gif` | Create animated GIF from HTML with CSS animations |
-| `pictify_capture_gif` | Record a GIF from a live web page over time |
 | `pictify_list_gifs` | List previously generated GIFs |
 | `pictify_get_gif` | Get details of a specific GIF by ID |
 

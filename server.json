@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.pictify-io/mcp",
-  "description": "Generate images, GIFs, videos, and PDFs from HTML, URLs, or templates — from your AI agent.",
+  "description": "Generate images, GIFs, videos, and PDFs from HTML, URLs, or templates \u2014 from your AI agent.",
   "websiteUrl": "https://pictify.io",
   "repository": {
     "url": "https://github.com/pictify-io/mcp",
     "source": "github"
   },
-  "version": "1.5.0",
+  "version": "1.6.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@pictify/mcp-server",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "transport": {
         "type": "stdio"
       },
@@ -30,7 +30,15 @@
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://mcp.pictify.io"
+      "url": "https://mcp.pictify.io",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "OAuth 2.1 bearer token. Clients discover the authorization server from https://mcp.pictify.io/.well-known/oauth-protected-resource and register dynamically; no manual configuration is required.",
+          "isRequired": false,
+          "isSecret": true
+        }
+      ]
     }
   ]
 }

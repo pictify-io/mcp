@@ -3,15 +3,9 @@
 import { randomUUID, createHash } from "node:crypto";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import {
-  mcpAuthMetadataRouter,
-  getOAuthProtectedResourceMetadataUrl,
-} from "@modelcontextprotocol/sdk/server/auth/router.js";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { createMcpExpressApp } from "@modelcontextprotocol/sdk/server/express.js";
 import { isInitializeRequest, SUPPORTED_PROTOCOL_VERSIONS } from "@modelcontextprotocol/sdk/types.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
-import type { OAuthMetadata } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { Request, Response } from "express";
 import express from "express";
 import { readFileSync } from "fs";
@@ -19,6 +13,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { instrument } from "@posthog/mcp";
 import { PictifyClient } from "./api-client.js";
+import { bearerOf, isPublicRequest } from "./auth-policy.js";
 import {
   createAnalyticsClient,
   dropExpectedExceptions,
@@ -43,9 +38,9 @@ const pkg = JSON.parse(
 
 const baseUrl = process.env.PICTIFY_BASE_URL || "https://api.pictify.io";
 const port = parseInt(process.env.MCP_PORT || "3000", 10);
-// Per-deployment default source slug. Hosted remote (mcp.pictify.io) gets the
-// real slug from ?source=<slug> on /authorize; this fallback covers requests
-// that arrive without a query param. PIC-6.
+// Per-deployment default source slug. Directory listings carry the real slug
+// as ?source=<slug> on the connector URL; this fallback covers requests that
+// arrive without one. PIC-6.
 const defaultSource = process.env.PICTIFY_MCP_SOURCE || "unknown";
 
 // Allowlist-style sanitizer for source slugs so junk query params don't
@@ -59,63 +54,72 @@ function sanitizeSource(raw: string | undefined | null): string | null {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory stores for OAuth codes and clients
+// Install attribution
 // ---------------------------------------------------------------------------
 
-// Maps authorization code -> { apiToken, codeChallenge, redirectUri, state, source }
-const authCodes = new Map<
-  string,
-  { apiToken: string; codeChallenge: string; redirectUri: string; state: string; source: string | null }
->();
-
-// Maps client_id -> { client_secret (= Pictify API token), redirect_uris }
-const clients = new Map<
-  string,
-  { client_secret: string; redirect_uris: string[]; client_name: string }
->();
-
-// Maps access_token (= Pictify API token) -> source slug captured at authorize-time.
-// The access token is the user's opaque Pictify API token, so we can't embed
-// attribution metadata on it. This side table lets the session factory look up
-// which directory the connection came from. Auto-expires after 7d.
-const tokenSources = new Map<string, { source: string; capturedAt: number }>();
-const TOKEN_SOURCE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-function rememberTokenSource(token: string, source: string | null) {
-  if (!token || !source) return;
-  tokenSources.set(token, { source, capturedAt: Date.now() });
-  setTimeout(() => tokenSources.delete(token), TOKEN_SOURCE_TTL_MS);
-}
-
-function lookupTokenSource(token: string | undefined): string | null {
-  if (!token) return null;
-  const entry = tokenSources.get(token);
-  if (!entry) return null;
-  if (Date.now() - entry.capturedAt > TOKEN_SOURCE_TTL_MS) {
-    tokenSources.delete(token);
-    return null;
-  }
-  return entry.source;
-}
+/*
+ * Attribution used to be captured on our own /authorize (?source=<slug>) and
+ * parked in a token -> slug side table until a session started. We are not the
+ * authorization server any more, so there is no authorize step here to capture
+ * it on, and that table is gone with it.
+ *
+ * Two routes survive and cover the same ground. Directory links carry the slug
+ * on the connector URL itself (https://mcp.pictify.io?source=mcp.so), which
+ * arrives on every POST; and PictifyClient stamps X-Pictify-MCP-Source on every
+ * call it makes, which is what util/mcp-attribution.js on the backend records
+ * against the account. PIC-6.
+ */
 
 // ---------------------------------------------------------------------------
 // Token verification — validates Bearer tokens against the Pictify backend
 // ---------------------------------------------------------------------------
 
+/*
+ * Verification is a round-trip to the backend, and the token now arrives on
+ * every single request (the old code trusted an mcp-session-id instead, which
+ * meant a session outlived the credential that opened it). A short cache keeps
+ * that from turning one tool call into two API calls.
+ *
+ * Keyed on a digest, not the token, so a heap dump or a stray log of this map
+ * isn't a pile of live credentials. 60 seconds is the window in which a token
+ * revoked in the dashboard still works here — short enough to be honest about,
+ * long enough that a burst of calls costs one round trip.
+ */
+const TOKEN_CACHE_TTL_MS = 60 * 1000;
+const TOKEN_CACHE_MAX = 1000;
+const tokenCache = new Map<string, { ok: boolean; checkedAt: number }>();
+
+const digest = (token: string) => createHash("sha256").update(token).digest("hex");
+
 const verifyAccessToken = async (token: string): Promise<AuthInfo> => {
-  console.log(`[pictify-mcp-http] Verifying token: ${token.substring(0, 8)}...`);
-  const res = await fetch(`${baseUrl}/api/users/`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  console.log(`[pictify-mcp-http] Token verification: ${res.status}`);
-  if (!res.ok) {
-    throw new Error("Invalid or expired token");
+  const key = digest(token);
+  const cached = tokenCache.get(key);
+
+  if (cached && Date.now() - cached.checkedAt < TOKEN_CACHE_TTL_MS) {
+    if (!cached.ok) throw new Error("Invalid or expired token");
+  } else {
+    const res = await fetch(`${baseUrl}/api/users/`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    // A backend blip is not a verdict on the credential: cache only answers
+    // the backend actually gave, so a 502 doesn't lock someone out for a
+    // minute. 401/403 are answers; 5xx is not.
+    if (res.status === 401 || res.status === 403 || res.ok) {
+      if (tokenCache.size >= TOKEN_CACHE_MAX) {
+        tokenCache.delete(tokenCache.keys().next().value as string);
+      }
+      tokenCache.set(key, { ok: res.ok, checkedAt: Date.now() });
+    }
+
+    if (!res.ok) throw new Error("Invalid or expired token");
   }
+
   return {
     token,
     clientId: "pictify-mcp",
     scopes: ["mcp:tools"],
-    expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60, // 1 year
+    expiresAt: Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60,
   };
 };
 
@@ -194,186 +198,72 @@ app.use((_req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// OAuth endpoints
+// OAuth 2.1 — we are a resource server, nothing more
 // ---------------------------------------------------------------------------
-// Claude.ai flow:
-//   1. User adds connector with URL https://mcp.pictify.io
-//      and enters their Pictify API token as "OAuth Client Secret"
-//   2. Claude.ai calls POST /register with client_secret
-//   3. Claude.ai opens GET /authorize in browser — auto-approves, redirects
-//      back with auth code
-//   4. Claude.ai calls POST /token to exchange code for access_token
-//   5. All MCP requests use Bearer {access_token} (= Pictify API token)
-// ---------------------------------------------------------------------------
-
-// POST /register — Dynamic Client Registration
-// Claude sends client_secret = user's Pictify API token
-app.post("/register", (req: Request, res: Response) => {
-  const { redirect_uris, client_name, client_secret } = req.body || {};
-
-  if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
-    res.status(400).json({ error: "invalid_client_metadata", error_description: "redirect_uris required" });
-    return;
-  }
-
-  const clientId = randomUUID();
-
-  clients.set(clientId, {
-    client_secret: client_secret || "",
-    redirect_uris,
-    client_name: client_name || "unknown",
-  });
-
-  // Auto-clean after 1 hour
-  setTimeout(() => clients.delete(clientId), 3600_000);
-
-  res.status(201).json({
-    client_id: clientId,
-    client_secret: client_secret || "",
-    client_id_issued_at: Math.floor(Date.now() / 1000),
-    redirect_uris,
-    client_name: client_name || "unknown",
-    grant_types: ["authorization_code"],
-    response_types: ["code"],
-    token_endpoint_auth_method: "none",
-  });
-});
-
-// GET /authorize — auto-approve and redirect with code
-// Two modes:
-//   1. Pre-registered client (via /register with client_secret = API token)
-//   2. Pre-configured client (user entered Client ID + Secret in Claude's Advanced Settings)
-// In mode 2, we don't know the API token yet — it comes in POST /token as client_secret.
-app.get("/authorize", (req: Request, res: Response) => {
-  const clientId = req.query.client_id as string;
-  const redirectUri = req.query.redirect_uri as string;
-  const state = (req.query.state as string) || "";
-  const codeChallenge = (req.query.code_challenge as string) || "";
-  // ?source=<slug> — CMO attaches this to MCP-listing links so we can attribute
-  // signups by directory (mcp.so, glama, smithery, etc.). PIC-6.
-  const source = sanitizeSource(req.query.source as string | undefined);
-
-  if (!clientId || !redirectUri) {
-    res.status(400).json({ error: "invalid_request", error_description: "client_id and redirect_uri required" });
-    return;
-  }
-
-  // Check if client was registered via DCR
-  const client = clients.get(clientId);
-  const apiToken = client?.client_secret || "";
-
-  // Generate authorization code
-  // If we have the API token from registration, embed it.
-  // If not (pre-configured client), it will come via client_secret in /token.
-  const code = randomUUID();
-  authCodes.set(code, { apiToken, codeChallenge, redirectUri, state, source });
-
-  // Auto-expire code after 10 minutes
-  setTimeout(() => authCodes.delete(code), 600_000);
-
-  // Redirect back to Claude's callback with the code
-  const target = new URL(redirectUri);
-  target.searchParams.set("code", code);
-  if (state) target.searchParams.set("state", state);
-
-  res.redirect(302, target.toString());
-});
-
-// POST /token — exchange code for access_token
-// The API token comes from either:
-//   - DCR registration (stored in authCodes via client_secret)
-//   - Pre-configured credentials (sent as client_secret in this request)
-app.post("/token", (req: Request, res: Response) => {
-  const { grant_type, code, code_verifier, redirect_uri, client_secret } = req.body || {};
-
-  if (grant_type !== "authorization_code") {
-    res.status(400).json({ error: "unsupported_grant_type" });
-    return;
-  }
-
-  const codeData = authCodes.get(code);
-  if (!codeData) {
-    res.status(400).json({ error: "invalid_grant", error_description: "Invalid or expired code" });
-    return;
-  }
-
-  // One-time use
-  authCodes.delete(code);
-
-  // Validate redirect_uri
-  if (redirect_uri && redirect_uri !== codeData.redirectUri) {
-    res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
-    return;
-  }
-
-  // Validate PKCE if challenge was provided
-  if (codeData.codeChallenge && code_verifier) {
-    const hash = createHash("sha256").update(code_verifier).digest("base64url");
-    if (hash !== codeData.codeChallenge) {
-      res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
-      return;
-    }
-  }
-
-  // Resolve the API token:
-  // 1. From DCR registration (stored in code data)
-  // 2. From pre-configured client_secret sent in this request
-  const apiToken = codeData.apiToken || client_secret;
-
-  if (!apiToken) {
-    res.status(400).json({ error: "invalid_grant", error_description: "No API token provided. Set your Pictify API token as the OAuth Client Secret." });
-    return;
-  }
-
-  // Persist the source slug captured at /authorize so subsequent MCP sessions
-  // started with this access_token get attributed correctly. PIC-6.
-  rememberTokenSource(apiToken, codeData.source);
-
-  res.json({
-    access_token: apiToken,
-    token_type: "bearer",
-    scope: "mcp:tools",
-  });
-});
-
-// POST /revoke
-app.post("/revoke", (_req: Request, res: Response) => {
-  res.status(200).end();
-});
-
-// ---------------------------------------------------------------------------
-// OAuth metadata
-// ---------------------------------------------------------------------------
+//
+// This file used to run its own authorization server: /register took the
+// user's raw Pictify API key as a "client secret", /authorize auto-approved
+// with no login and no human in the loop, /token handed that same key back as
+// an access_token, PKCE was checked only when the client happened to send both
+// halves, and /revoke was a 200 that did nothing. It existed because there was
+// nothing else to point at.
+//
+// There is now: api.pictify.io is a real OAuth 2.1 authorization server, with
+// dynamic client registration, mandatory S256 PKCE, a consent screen, expiring
+// tokens and working revocation. So the whole stub is deleted and we do the one
+// job a resource server has — say who our authorization server is, and answer
+// 401 with a pointer to this document when someone arrives without a token.
+//
+// That 401 is the entire point of the change. An unauthenticated tool call used
+// to be forwarded to the API to fail there, which reaches the agent as "Error
+// (401): check that your PICTIFY_API_KEY is valid" — advice you cannot act on
+// in a client where you never typed a key. A 401 carrying WWW-Authenticate is
+// what makes Claude.ai and Codex go and get one.
 
 const mcpServerUrl = new URL(
   process.env.MCP_PUBLIC_URL || `http://localhost:${port}`,
 );
 const publicUrl = mcpServerUrl.origin;
+const authorizationServer = process.env.PICTIFY_AUTH_SERVER || "https://api.pictify.io";
 
-const oauthMetadata = {
-  issuer: publicUrl,
-  authorization_endpoint: `${publicUrl}/authorize`,
-  token_endpoint: `${publicUrl}/token`,
-  registration_endpoint: `${publicUrl}/register`,
-  revocation_endpoint: `${publicUrl}/revoke`,
-  response_types_supported: ["code"],
-  grant_types_supported: ["authorization_code"],
-  token_endpoint_auth_methods_supported: ["none", "client_secret_post"],
-  code_challenge_methods_supported: ["S256"],
+const resourceMetadata = {
+  resource: publicUrl,
+  authorization_servers: [authorizationServer],
   scopes_supported: ["mcp:tools"],
-} satisfies OAuthMetadata;
+  bearer_methods_supported: ["header"],
+  resource_name: "Pictify MCP Server",
+  resource_documentation: "https://docs.pictify.io",
+};
 
-app.get("/.well-known/oauth-authorization-server", (_req: Request, res: Response) => {
-  res.json(oauthMetadata);
-});
+const resourceMetadataUrl = `${publicUrl}/.well-known/oauth-protected-resource`;
 
-app.use(
-  mcpAuthMetadataRouter({
-    oauthMetadata,
-    resourceServerUrl: mcpServerUrl,
-    resourceName: "Pictify MCP Server",
-  }),
-);
+const sendResourceMetadata = (_req: Request, res: Response) => {
+  res.json(resourceMetadata);
+};
+
+app.get("/.well-known/oauth-protected-resource", sendResourceMetadata);
+// Clients derive the path-suffixed form (RFC 9728 §3.1) from the resource URL
+// they were pointed at and try it first. Named wildcard, not a bare `*` —
+// express 5's path-to-regexp rejects the unnamed form at route-registration
+// time, which means at boot.
+app.get("/.well-known/oauth-protected-resource/*splat", sendResourceMetadata);
+
+/**
+ * The 401 every unauthenticated attempt to *do* something gets. The header is
+ * the useful part: it names the document that names the authorization server,
+ * which is how a client bootstraps the whole flow knowing only our URL.
+ */
+function unauthorized(res: Response, description: string) {
+  res.setHeader(
+    "WWW-Authenticate",
+    `Bearer realm="pictify", error="invalid_token", error_description="${description}", resource_metadata="${resourceMetadataUrl}"`,
+  );
+  res.status(401).json({
+    jsonrpc: "2.0",
+    error: { code: -32001, message: description },
+    id: null,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // MCP Server Card (SEP-2127, still Draft — schema.ts in
@@ -406,136 +296,227 @@ app.get("/server-card", (_req: Request, res: Response) => {
 });
 
 // ---------------------------------------------------------------------------
-// Bearer auth middleware
+// Bearer auth
 // ---------------------------------------------------------------------------
 
-const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(mcpServerUrl);
-
-const oauthMiddleware = requireBearerAuth({
-  verifier: { verifyAccessToken },
-  requiredScopes: [],
-  resourceMetadataUrl,
-});
-
-// Flexible auth middleware:
-// 1. If X-API-Key or Bearer token is present, verify directly (Smithery, Claude Code, etc.)
-// 2. If this is an initialize request with no auth, allow through for tool discovery (scanners)
-// 3. Otherwise, fall through to OAuth middleware (Claude.ai)
+/*
+ * Three outcomes, in order:
+ *
+ *  1. A token that verifies -> authenticated session.
+ *  2. No token (or a bad one) on a discovery request -> through, anonymous.
+ *  3. Anything else -> 401 with WWW-Authenticate.
+ *
+ * What is deliberately gone: an `mcp-session-id` header used to be accepted on
+ * its own, on the reasoning that auth "was checked at init time". It meant a
+ * session outlived the credential that opened it — revoke a token and the open
+ * session kept working — and it let anyone who learned a session id skip auth
+ * entirely. The token is re-checked on every request now; the cache above is
+ * what makes that cheap.
+ */
 const authMiddleware = async (req: Request, res: Response, next: () => void) => {
-  const authHeader = req.headers.authorization;
-  const apiKeyHeader = req.headers["x-api-key"] as string | undefined;
-
-  // Extract token from Authorization header (Bearer prefix) or X-API-Key
-  const token = authHeader?.startsWith("Bearer ")
-    ? authHeader.slice(7)
-    : apiKeyHeader || null;
+  const token = bearerOf(req.headers);
 
   if (token) {
     try {
-      const authInfo = await verifyAccessToken(token);
-      (req as any).auth = authInfo;
+      (req as any).auth = await verifyAccessToken(token);
       next();
       return;
     } catch {
-      // Token invalid — fall through to OAuth which will return a proper 401
-      // with WWW-Authenticate header pointing to the OAuth metadata
+      // Fall through: a bad token is treated as no token, so a client holding
+      // an expired one gets the same 401-with-a-pointer that starts a refresh.
     }
   }
 
-  // Allow unauthenticated initialize requests for tool discovery (Smithery scanner, etc.)
-  // Tool calls will fail at the API level without a valid key, but schema discovery works.
-  if (req.method === "POST" && isInitializeRequest(req.body)) {
+  // GET and DELETE are stream resumption and teardown for a session that was
+  // authenticated when it opened. Without a valid token there is no session of
+  // ours to resume, and the handlers below reject the id as unknown.
+  if (req.method !== "POST") {
+    unauthorized(res, "Authentication required");
+    return;
+  }
+
+  if (isPublicRequest(req.body)) {
     next();
     return;
   }
 
-  // For existing sessions without auth, let them through — auth was checked at init time
-  if (req.headers["mcp-session-id"]) {
-    next();
-    return;
-  }
-
-  oauthMiddleware(req, res, next);
+  unauthorized(
+    res,
+    "Connect your Pictify account to use this tool",
+  );
 };
 
 // ---------------------------------------------------------------------------
 // Session management
 // ---------------------------------------------------------------------------
 
-const transports: Record<string, StreamableHTTPServerTransport> = {};
+/*
+ * Authenticated sessions are pooled, because a render can stream progress back
+ * over the session's SSE channel and that needs the transport to still be here.
+ *
+ * Two caps, because nothing ever removed an entry except an explicit close, and
+ * a crawler that connects and walks away leaves one behind forever: an idle
+ * sweep, and a ceiling that evicts the least recently used. Anonymous discovery
+ * is not pooled at all — see the POST handler.
+ */
+const SESSION_IDLE_MS = 30 * 60 * 1000;
+const SESSION_MAX = 500;
+const SESSION_SWEEP_MS = 5 * 60 * 1000;
+
+interface Session {
+  transport: StreamableHTTPServerTransport;
+  touchedAt: number;
+}
+
+const sessions = new Map<string, Session>();
+
+function touchSession(id: string): Session | undefined {
+  const session = sessions.get(id);
+  if (!session) return undefined;
+  session.touchedAt = Date.now();
+  // Re-insert so Map iteration order is least-recently-used first.
+  sessions.delete(id);
+  sessions.set(id, session);
+  return session;
+}
+
+async function closeSession(id: string) {
+  const session = sessions.get(id);
+  sessions.delete(id);
+  if (session) await session.transport.close().catch(() => {});
+}
+
+async function evictOldest() {
+  while (sessions.size >= SESSION_MAX) {
+    const oldest = sessions.keys().next().value as string | undefined;
+    if (!oldest) return;
+    console.log(`[pictify-mcp-http] Session evicted (at capacity): ${oldest}`);
+    await closeSession(oldest);
+  }
+}
+
+const sessionSweep = setInterval(() => {
+  const cutoff = Date.now() - SESSION_IDLE_MS;
+  for (const [id, session] of sessions) {
+    // LRU order: the first entry that is recent enough ends the sweep.
+    if (session.touchedAt >= cutoff) break;
+    console.log(`[pictify-mcp-http] Session swept (idle): ${id}`);
+    void closeSession(id);
+  }
+}, SESSION_SWEEP_MS);
+sessionSweep.unref();
 
 // ---------------------------------------------------------------------------
 // MCP endpoint handlers
 // ---------------------------------------------------------------------------
 
+/** Where this connection came from, for install attribution. PIC-6. */
+function sourceOf(req: Request): string | null {
+  return (
+    sanitizeSource(req.headers["x-pictify-mcp-source"] as string | undefined) ??
+    sanitizeSource((req.query as Record<string, unknown>)?.source as string | undefined)
+  );
+}
+
 app.post("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const authInfo = (req as any).auth as AuthInfo | undefined;
 
-  if (sessionId && transports[sessionId]) {
-    await transports[sessionId].handleRequest(req, res, req.body);
+  if (sessionId) {
+    const session = touchSession(sessionId);
+    if (!session) {
+      res.status(404).json({
+        jsonrpc: "2.0",
+        error: { code: -32000, message: "Session not found" },
+        id: null,
+      });
+      return;
+    }
+    await session.transport.handleRequest(req, res, req.body);
     return;
   }
 
-  if (sessionId && !transports[sessionId]) {
-    res.status(404).json({ jsonrpc: "2.0", error: { code: -32000, message: "Session not found" }, id: null });
+  /*
+   * Unauthenticated discovery runs stateless: a throwaway server and transport
+   * per request, closed as soon as it has answered. No session id goes out and
+   * nothing is retained.
+   *
+   * This is what stops a thousand crawler connects a day from each parking a
+   * live session — and it is honest about what that connection is. There is no
+   * account behind it, so there is nothing for a session to hold.
+   */
+  if (!authInfo) {
+    const server = createMcpServer("anonymous", sourceOf(req));
+    const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+    res.on("close", () => {
+      void transport.close().catch(() => {});
+      void server.close().catch(() => {});
+    });
+    await server.connect(transport);
+    await transport.handleRequest(req, res, req.body);
     return;
   }
 
   if (!isInitializeRequest(req.body)) {
-    res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "Expected initialization request" }, id: null });
+    res.status(400).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Expected initialization request" },
+      id: null,
+    });
     return;
   }
 
-  const authInfo = (req as any).auth as AuthInfo | undefined;
-  const apiKey = authInfo?.token || "anonymous";
-
-  // Source resolution priority: explicit header > query param > token-bound
-  // source from OAuth /authorize > deployment default.
-  const headerSource = sanitizeSource(req.headers["x-pictify-mcp-source"] as string | undefined);
-  const querySource = sanitizeSource((req.query as Record<string, unknown>)?.source as string | undefined);
-  const tokenSource = lookupTokenSource(apiKey);
-  const sessionSource = headerSource ?? querySource ?? tokenSource ?? null;
-  if (sessionSource) {
-    console.log(`[pictify-mcp-http] Session source: ${sessionSource}`);
-  }
+  await evictOldest();
 
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
     onsessioninitialized: (id) => {
-      transports[id] = transport;
+      sessions.set(id, { transport, touchedAt: Date.now() });
       console.log(`[pictify-mcp-http] Session initialized: ${id}`);
     },
   });
 
   transport.onclose = () => {
-    if (transport.sessionId) {
-      delete transports[transport.sessionId];
+    if (transport.sessionId && sessions.delete(transport.sessionId)) {
       console.log(`[pictify-mcp-http] Session closed: ${transport.sessionId}`);
     }
   };
 
-  const server = createMcpServer(apiKey, sessionSource);
+  const sessionSource = sourceOf(req);
+  if (sessionSource) {
+    console.log(`[pictify-mcp-http] Session source: ${sessionSource}`);
+  }
+
+  const server = createMcpServer(authInfo.token, sessionSource);
   await server.connect(transport);
   await transport.handleRequest(req, res, req.body);
 });
 
 app.get("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  if (!sessionId || !transports[sessionId]) {
-    res.status(400).json({ jsonrpc: "2.0", error: { code: -32000, message: "Invalid or missing session" }, id: null });
+  const session = sessionId ? touchSession(sessionId) : undefined;
+  if (!session) {
+    res.status(400).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Invalid or missing session" },
+      id: null,
+    });
     return;
   }
-  await transports[sessionId].handleRequest(req, res);
+  await session.transport.handleRequest(req, res);
 });
 
 app.delete("/", authMiddleware, async (req: Request, res: Response) => {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  if (!sessionId || !transports[sessionId]) {
-    res.status(404).json({ jsonrpc: "2.0", error: { code: -32000, message: "Session not found" }, id: null });
+  if (!sessionId || !sessions.has(sessionId)) {
+    res.status(404).json({
+      jsonrpc: "2.0",
+      error: { code: -32000, message: "Session not found" },
+      id: null,
+    });
     return;
   }
-  await transports[sessionId].close();
-  delete transports[sessionId];
+  await closeSession(sessionId);
   res.status(200).end();
 });
 
@@ -545,7 +526,8 @@ app.delete("/", authMiddleware, async (req: Request, res: Response) => {
 
 const httpServer = app.listen(port, "0.0.0.0", () => {
   console.log(`[pictify-mcp-http] Listening on http://0.0.0.0:${port}`);
-  console.log(`[pictify-mcp-http] OAuth metadata at ${resourceMetadataUrl}`);
+  console.log(`[pictify-mcp-http] Resource metadata at ${resourceMetadataUrl}`);
+  console.log(`[pictify-mcp-http] Authorization server: ${authorizationServer}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -554,7 +536,8 @@ const httpServer = app.listen(port, "0.0.0.0", () => {
 
 async function shutdown() {
   console.log("[pictify-mcp-http] Shutting down...");
-  await Promise.all(Object.values(transports).map((t) => t.close().catch(() => {})));
+  clearInterval(sessionSweep);
+  await Promise.all([...sessions.keys()].map((id) => closeSession(id)));
   await shutdownAnalytics(posthog);
   httpServer.close(() => { process.exit(0); });
   setTimeout(() => { process.exit(1); }, 5000);

@@ -1,0 +1,48 @@
+name: CI
+
+# Nothing compiled this repo before merging. Two of the last three releases
+# shipped a change that only tsc or a boot would have caught — most recently an
+# express 5 route pattern that throws at route registration, i.e. at startup.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Tests run straight off the .ts sources, which needs the stable
+          # type-stripping in 22.18+. The published package targets Node 20.
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run build
+
+      - run: npm test
+
+      # The server registers every route and starts listening on import, so
+      # booting it is the check that catches what type-checking cannot: a bad
+      # route pattern, a missing env default, a throw at module scope.
+      - name: Boot the HTTP server
+        run: |
+          MCP_PORT=3399 MCP_PUBLIC_URL=http://localhost:3399 \
+            PICTIFY_ANALYTICS_DISABLED=1 node build/http.js &
+          for _ in $(seq 1 20); do
+            curl -sf http://localhost:3399/.well-known/oauth-protected-resource >/dev/null && exit 0
+            sleep 0.5
+          done
+          echo "server did not answer on /.well-known/oauth-protected-resource"
+          exit 1

@@ -20,25 +20,26 @@ Works with Claude (claude.ai + Claude Code + Claude Desktop), Cursor, Windsurf, 
 
 ## Quick Start
 
-### Prerequisites
-
-Get your API key:
-
-1. Sign up or log in at [pictify.io](https://pictify.io)
-2. Go to [API Tokens](https://pictify.io/dashboard/api-tokens)
-3. Create a new token and copy it
-
 ### Claude.ai (Web)
 
-Use the hosted remote server — no install needed:
+Use the hosted remote server — no install, no API key:
 
 1. Go to [claude.ai](https://claude.ai) > **Settings** > **Connectors**
 2. Click **Add custom connector**
 3. URL: `https://mcp.pictify.io`
-4. Click **Advanced Settings**
-5. **Client ID**: `pictify`
-6. **Client Secret**: paste your API token
-7. Click **Add**
+4. Click **Add**, then **Connect** — you'll log in to Pictify and approve access
+
+Nothing goes in Advanced Settings. The connection appears under **Connected
+apps** in your [Pictify settings](https://pictify.io/dashboard/api-token), where
+you can disconnect it at any time.
+
+### Prerequisites for the local server
+
+The npm package authenticates with an API key rather than a browser login:
+
+1. Sign up or log in at [pictify.io](https://pictify.io)
+2. Go to [API Tokens](https://pictify.io/dashboard/api-token)
+3. Create a new token and copy it
 
 ### Claude Code
 
@@ -173,6 +174,16 @@ Try these prompts after connecting:
 | `pictify_get_batch_results` | Check batch job status and get result URLs |
 | `pictify_cancel_batch` | Cancel a running batch job |
 
+### Video
+
+| Tool | Description |
+|------|-------------|
+| `pictify_list_video_templates` | List your Remotion video templates |
+| `pictify_get_video_template_variables` | Discover the variables a video template expects |
+| `pictify_render_video` | Render a video template to MP4 or GIF |
+| `pictify_create_video_template` | Upload your own Remotion scene as a template |
+| `pictify_generate_video_template` | Generate a video template from a text prompt |
+
 ## Configuration
 
 | Variable | Description | Default |
@@ -181,6 +192,24 @@ Try these prompts after connecting:
 | `PICTIFY_BASE_URL` | Custom API base URL | `https://api.pictify.io` |
 | `PICTIFY_DEBUG` | Enable verbose logging to stderr | `false` |
 | `PICTIFY_MCP_SOURCE` | Slug identifying where this MCP server was installed from (e.g. `mcp.so`, `glama`, `smithery`, `claude_desktop_gallery`, `github`). Sent as `X-Pictify-MCP-Source` on every API call so Pictify can attribute installs by directory. | `unknown` |
+| `PICTIFY_ANALYTICS_DISABLED` | Set to `1`, `true` or `yes` to send no usage analytics at all | `false` |
+
+Self-hosting the HTTP server adds `MCP_PORT`, `MCP_PUBLIC_URL` (the public
+origin, used to build the protected-resource metadata document) and
+`PICTIFY_AUTH_SERVER` (the OAuth authorization server to point clients at,
+defaulting to `https://api.pictify.io`).
+
+### Usage analytics
+
+This server reports tool usage to [PostHog](https://posthog.com) so we can see
+which tools agents reach for and which ones fail. Each call records the tool
+name, its **arguments and result**, timing, whether it errored, the stated
+intent, your client name and version, and — when an API key resolves to an
+account — your email and plan.
+
+Arguments and results mean the HTML, URLs, prompts and template variables you
+pass in. If that isn't acceptable for your use, set
+`PICTIFY_ANALYTICS_DISABLED=1` and nothing is sent.
 
 ### Install attribution
 

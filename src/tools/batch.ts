@@ -1,22 +1,19 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PictifyClient } from "../api-client.js";
-import { formatError, ToolInputError } from "../utils.js";
+import { formatError, requireExactlyOne, ToolInputError } from "../utils.js";
 
 export function registerBatchTools(server: McpServer, client: PictifyClient) {
   server.tool(
     "pictify_batch_render",
-    "Start a batch render job to generate multiple images from a single template — from inline variable sets, or from a hosted CSV where every row becomes a render. " +
-      "REQUIRED: exactly one of variableSets (inline rows) or csvUrl (+ mappings). A call with neither is rejected. " +
-      "Each variable set produces a separate image. Supports up to 100 items per batch (plan-dependent). " +
-      "Common use cases: generating personalized social cards for all team members, " +
-      "product images for an entire catalog, event badges for all attendees, " +
-      "certificate images for course graduates, or marketing assets with localized content. " +
-      "WORKFLOW: 1) Use pictify_get_template_variables to discover variables, " +
-      "2) Call this tool with an array of variable sets, " +
-      "3) Use pictify_get_batch_results to poll for completion and get result URLs. " +
-      "The job runs asynchronously — this tool returns immediately with a batchId (HTTP 202). " +
-      "For generating a single multi-page PDF instead, use pictify_render_multi_page_pdf.",
+    "Render one template many times — one image per row of data.\n\n" +
+      "Pass EITHER variableSets (rows inline) OR csvUrl with mappings (rows from a hosted CSV). " +
+      "Exactly one; a call with neither is rejected.\n\n" +
+      "Steps: call pictify_get_template_variables first to see what the template expects, " +
+      "call this tool, then poll pictify_get_batch_results with the returned batchId. " +
+      "The job is asynchronous — this returns immediately, before any image exists.\n\n" +
+      "Up to 100 rows per batch, plan-dependent. " +
+      "For many rows in one PDF instead of many images, use pictify_render_multi_page_pdf.",
     {
       templateId: z
         .string()
@@ -85,15 +82,12 @@ export function registerBatchTools(server: McpServer, client: PictifyClient) {
     },
     async ({ templateId, variableSets, csvUrl, mappings, format, quality, concurrency, layout, layouts }) => {
       try {
-        if (!variableSets && !csvUrl) {
-          throw new ToolInputError(
-            "Provide either variableSets (rows mode: an array of { variable: value } objects) or csvUrl (CSV mode, with mappings). " +
-              "Call pictify_get_template_variables first to see which variables the template expects.",
-          );
-        }
-        if (variableSets && csvUrl) {
-          throw new ToolInputError("variableSets and csvUrl are mutually exclusive — pick one input mode.");
-        }
+        requireExactlyOne(
+          { variableSets, csvUrl },
+          "variableSets is an array of { variable: value } objects, one per image. " +
+            "csvUrl is a publicly fetchable CSV whose rows become the images, and needs mappings. " +
+            "Call pictify_get_template_variables first to see which variables the template expects.",
+        );
         if (csvUrl && !mappings) {
           throw new ToolInputError("CSV mode needs 'mappings' ({ templateVariable: 'CSV Column' }).");
         }

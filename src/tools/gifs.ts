@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PictifyClient } from "../api-client.js";
-import { formatError } from "../utils.js";
+import { expectField, formatError, requireExactlyOne } from "../utils.js";
 
 export function registerGifTools(server: McpServer, client: PictifyClient) {
   server.tool(
@@ -55,6 +55,12 @@ export function registerGifTools(server: McpServer, client: PictifyClient) {
     },
     async ({ html, url, template, variables, width, height }) => {
       try {
+        requireExactlyOne(
+          { html, url, template },
+          "Pass html to animate markup you have, url to capture a live page, " +
+            "or template (a template UID, with variables) to render a saved template.",
+        );
+
         const body: Record<string, unknown> = { width, height };
         if (html) body.html = html;
         if (url) body.url = url;
@@ -64,15 +70,16 @@ export function registerGifTools(server: McpServer, client: PictifyClient) {
         const result = await client.post<{
           gif: { url: string; uid: string; animationLength: number };
         }>("/gif", body);
+        const gif = expectField(result?.gif, "gif", "POST /gif");
         return {
           content: [
             {
               type: "text" as const,
               text:
                 `GIF created successfully.\n\n` +
-                `URL: ${result.gif.url}\n` +
-                `ID: ${result.gif.uid}\n` +
-                `Animation length: ${result.gif.animationLength}s\n` +
+                `URL: ${gif.url}\n` +
+                `ID: ${gif.uid}\n` +
+                `Animation length: ${gif.animationLength}s\n` +
                 `Dimensions: ${width}x${height}`,
             },
           ],
@@ -134,14 +141,15 @@ export function registerGifTools(server: McpServer, client: PictifyClient) {
         const result = await client.post<{
           gif: { url: string; uid: string };
         }>("/gif/capture", body);
+        const gif = expectField(result?.gif, "gif", "POST /gif/capture");
         return {
           content: [
             {
               type: "text" as const,
               text:
                 `GIF captured successfully.\n\n` +
-                `URL: ${result.gif.url}\n` +
-                `ID: ${result.gif.uid}`,
+                `URL: ${gif.url}\n` +
+                `ID: ${gif.uid}`,
             },
           ],
         };

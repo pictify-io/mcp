@@ -13,6 +13,70 @@ export class ToolInputError extends Error {
   }
 }
 
+/**
+ * The API answered 2xx with a body that isn't the shape we render from.
+ *
+ * Unlike ToolInputError this IS a defect worth paging on, so it is deliberately
+ * not in the expected-error list — the point is only that the alert should name
+ * the field and the endpoint instead of arriving as "Cannot read properties of
+ * undefined (reading 'url')" from whichever line happened to dereference first.
+ */
+export class ToolResponseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ToolResponseError";
+  }
+}
+
+/**
+ * Read a field the API is contracted to return, failing loudly and by name
+ * when it isn't there.
+ */
+export function expectField<T>(
+  value: T | null | undefined,
+  field: string,
+  endpoint: string,
+): T {
+  if (value === undefined || value === null) {
+    throw new ToolResponseError(`expected \`${field}\` in the response from ${endpoint}`);
+  }
+  return value;
+}
+
+/**
+ * Enforce "exactly one of these arguments", which a zod raw shape cannot say.
+ *
+ * Most tools here document the rule in prose and then forward whatever arrives:
+ * a call with none of them goes to the API to be rejected there, and a call
+ * with two silently sends both and lets the backend pick. Neither reaches the
+ * agent as something it can act on. This turns both into one sentence naming
+ * the arguments and what each is for.
+ *
+ * `hint` should say what to pass and why — it is the only thing the agent has
+ * to correct the call with.
+ */
+export function requireExactlyOne(
+  candidates: Record<string, unknown>,
+  hint: string,
+): void {
+  const provided = Object.entries(candidates)
+    .filter(([, value]) => value !== undefined && value !== null)
+    .map(([name]) => name);
+
+  const names = Object.keys(candidates);
+  const list = `${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}`;
+
+  if (provided.length === 0) {
+    throw new ToolInputError(`Provide exactly one of ${list}. ${hint}`);
+  }
+
+  if (provided.length > 1) {
+    throw new ToolInputError(
+      `${provided.join(" and ")} are mutually exclusive — pass exactly one of ${list}. ${hint}`,
+    );
+  }
+}
+
 export function formatError(error: unknown): {
   content: Array<{ type: "text"; text: string }>;
   isError: true;
@@ -52,6 +116,18 @@ export function formatError(error: unknown): {
   if (error instanceof ToolInputError) {
     return {
       content: [{ type: "text", text: `Invalid input: ${error.message}` }],
+      isError: true,
+    };
+  }
+
+  if (error instanceof ToolResponseError) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `Unexpected response from the Pictify API: ${error.message}. This is a Pictify bug, not something the call can be corrected for.`,
+        },
+      ],
       isError: true,
     };
   }

@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PictifyClient } from "../api-client.js";
-import { formatError } from "../utils.js";
+import { formatError, requireExactlyOne } from "../utils.js";
 
 export function registerImageTools(server: McpServer, client: PictifyClient) {
   server.tool(
@@ -77,6 +77,12 @@ export function registerImageTools(server: McpServer, client: PictifyClient) {
     },
     async ({ html, url, template, variables, width, height, fileExtension, selector }) => {
       try {
+        requireExactlyOne(
+          { html, url, template },
+          "Pass html to render markup you have, url to screenshot a live page, " +
+            "or template (a template UID, with variables) to render a saved template.",
+        );
+
         const body: Record<string, unknown> = { width, height, fileExtension };
         if (html) body.html = html;
         if (url) body.url = url;

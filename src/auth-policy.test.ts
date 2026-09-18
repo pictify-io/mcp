@@ -1,6 +1,6 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { isPublicRequest, bearerOf, PUBLIC_METHODS } from "./auth-policy.ts";
+import { isPublicRequest, bearerOf, PUBLIC_METHODS } from "./auth-policy.js";
 
 /**
  * The transport answers an unauthenticated caller in one of two ways: serve it,

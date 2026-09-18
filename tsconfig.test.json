@@ -1,0 +1,12 @@
+{
+  "//": "Tests compile with the same module resolution as the shipped code, and run against the compiled output, so an import that would break at runtime breaks here too. Output goes to build-test/, which is gitignored and outside the published `files` list.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./build-test",
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "build", "build-test"]
+}

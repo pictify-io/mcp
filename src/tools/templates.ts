@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PictifyClient } from "../api-client.js";
-import { formatError } from "../utils.js";
+import { expectField, formatError, requireExactlyOne, ToolInputError } from "../utils.js";
 
 export function registerTemplateTools(server: McpServer, client: PictifyClient) {
   server.tool(
@@ -186,7 +186,12 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
           body,
         );
 
-        const lines = result.results.map(
+        const results = expectField(
+          result?.results,
+          "results",
+          `POST /templates/${templateId}/render`,
+        );
+        const lines = results.map(
           (r) => `  ${r.name} (${r.layout}) — ${r.width}x${r.height}: ${r.url}`,
         );
 
@@ -282,6 +287,12 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
     },
     async ({ name, html, fabricJSData, width, height, type, category, tags, variableDefinitions, outputFormat }) => {
       try {
+        requireExactlyOne(
+          { html, fabricJSData },
+          "Pass html for a markup template (use {{variableName}} placeholders), " +
+            "or fabricJSData for a canvas built in the Pictify visual editor.",
+        );
+
         const body: Record<string, unknown> = { name };
         if (html) body.html = html;
         if (fabricJSData) body.fabricJSData = fabricJSData;
@@ -297,16 +308,17 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
           "/templates",
           body,
         );
+        const template = expectField(result?.template, "template", "POST /templates");
         return {
           content: [
             {
               type: "text" as const,
               text:
                 `Template created successfully.\n\n` +
-                `ID: ${result.template.uid}\n` +
-                `Name: ${result.template.name}\n\n` +
+                `ID: ${template.uid}\n` +
+                `Name: ${template.name}\n\n` +
                 `Next steps:\n` +
-                `1. Use pictify_get_template_variables with ID '${result.template.uid}' to see detected variables\n` +
+                `1. Use pictify_get_template_variables with ID '${template.uid}' to see detected variables\n` +
                 `2. Use pictify_render_template to render it with specific values`,
             },
           ],
@@ -360,18 +372,37 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
     },
     async ({ templateId, ...updates }) => {
       try {
+        // Every field is optional here, so "update nothing" is a call the
+        // schema accepts. It reads as success and changes nothing, which is
+        // worse than being told.
         const body = Object.fromEntries(
           Object.entries(updates).filter(([, v]) => v !== undefined),
         );
+        if (Object.keys(body).length === 0) {
+          throw new ToolInputError(
+            "Nothing to update. Pass at least one of name, html, fabricJSData, width, height or variableDefinitions.",
+          );
+        }
+        if (updates.html !== undefined && updates.fabricJSData !== undefined) {
+          throw new ToolInputError(
+            "html and fabricJSData are mutually exclusive — update one or the other, not both.",
+          );
+        }
+
         const result = await client.put<{ template: { uid: string; name: string } }>(
           `/templates/${templateId}`,
           body,
+        );
+        const template = expectField(
+          result?.template,
+          "template",
+          `PUT /templates/${templateId}`,
         );
         return {
           content: [
             {
               type: "text" as const,
-              text: `Template updated successfully.\n\nID: ${result.template.uid}\nName: ${result.template.name}`,
+              text: `Template updated successfully.\n\nID: ${template.uid}\nName: ${template.name}`,
             },
           ],
         };

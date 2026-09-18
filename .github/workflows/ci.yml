@@ -22,9 +22,10 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          # Tests run straight off the .ts sources, which needs the stable
-          # type-stripping in 22.18+. The published package targets Node 20.
-          node-version: '22'
+          # Matches production. Tests compile to build-test/ and run against
+          # that output, so they exercise the same module resolution as the
+          # shipped code rather than a stripped-types approximation.
+          node-version: '20'
           cache: npm
 
       - run: npm ci

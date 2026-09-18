@@ -13,7 +13,7 @@ export function registerBatchTools(server: McpServer, client: PictifyClient) {
       "call this tool, then poll pictify_get_batch_results with the returned batchId. " +
       "The job is asynchronous — this returns immediately, before any image exists.\n\n" +
       "Up to 100 rows per batch, plan-dependent. " +
-      "For many rows in one PDF instead of many images, use pictify_render_multi_page_pdf.",
+      "For a PDF rather than images, render the template with pictify_render_template and format: 'pdf'.",
     {
       templateId: z
         .string()

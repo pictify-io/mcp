@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PictifyClient } from "../api-client.js";
-import { formatError } from "../utils.js";
+import { expectField, formatError, ToolInputError } from "../utils.js";
 
 /*
  * Video templates: render MP4/GIF from saved templates, and generate new
@@ -288,6 +288,150 @@ export function registerVideoTools(server: McpServer, client: PictifyClient) {
                 (variables ? `\nEditable variables: ${variables}` : "") +
                 (result.previewUrl ? `\nPreview frame: ${result.previewUrl}` : "") +
                 `\n\nRender it with pictify_render_video, or open it in the studio to refine.`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  /*
+   * Parity with the image-template tools. A video template could be created,
+   * listed and rendered but never read back, edited or removed — so an agent
+   * that made one it did not want had no way to clean up, and no way to change
+   * a name or a duration without going to the dashboard.
+   */
+
+  server.tool(
+    "pictify_get_video_template",
+    "Get one video template in full — its kind (timeline or tsx code), dimensions, fps, duration, " +
+      "variable definitions and current status. Use this before updating one, to see what is there.",
+    {
+      templateId: z.string().describe("The video template UID to retrieve"),
+    },
+    async ({ templateId }) => {
+      try {
+        const result = await client.get<unknown>(`/video/templates/${templateId}`);
+        return {
+          content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  server.tool(
+    "pictify_update_video_template",
+    "Update a video template's name, dimensions, frame rate, duration, variable definitions, " +
+      "or — for code (tsx) templates only — its Remotion source. " +
+      "Only the fields you pass change. " +
+      "Timeline templates reject 'tsx': those are edited as a scene graph, not as code.",
+    {
+      templateId: z.string().describe("The video template UID to update"),
+      name: z.string().optional().describe("New template name"),
+      tsx: z
+        .string()
+        .optional()
+        .describe(
+          "Replacement Remotion component source. Code (tsx) templates only — sending this " +
+            "for a timeline template is rejected.",
+        ),
+      width: z.number().min(1).max(4000).optional().describe("Composition width in pixels"),
+      height: z.number().min(1).max(4000).optional().describe("Composition height in pixels"),
+      fps: z.number().min(1).max(120).optional().describe("Frames per second"),
+      durationInFrames: z
+        .number()
+        .min(1)
+        .optional()
+        .describe("Composition length in frames (seconds x fps)"),
+      variableDefinitions: z
+        .record(z.unknown())
+        .optional()
+        .describe("Replacement variable schema for the template"),
+    },
+    async ({ templateId, ...updates }) => {
+      try {
+        const body = Object.fromEntries(
+          Object.entries(updates).filter(([, v]) => v !== undefined),
+        );
+        if (Object.keys(body).length === 0) {
+          throw new ToolInputError(
+            "Nothing to update. Pass at least one of name, tsx, width, height, fps, " +
+              "durationInFrames or variableDefinitions.",
+          );
+        }
+
+        const result = await client.put<{ template?: { uid: string; name: string } }>(
+          `/video/templates/${templateId}`,
+          body,
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `Video template updated.\n\nUID: ${result?.template?.uid ?? templateId}` +
+                `\nName: ${result?.template?.name ?? "(unchanged)"}` +
+                `\nChanged: ${Object.keys(body).join(", ")}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  server.tool(
+    "pictify_duplicate_video_template",
+    "Copy a video template into a new one, leaving the original untouched. " +
+      "Use this to branch a working template before changing it. " +
+      "The copy counts against the saved-template limit on your plan.",
+    {
+      templateId: z.string().describe("The video template UID to copy"),
+    },
+    async ({ templateId }) => {
+      try {
+        const result = await client.post<{ template?: { uid: string; name: string } }>(
+          `/video/templates/${templateId}/duplicate`,
+        );
+        const template = expectField(
+          result?.template,
+          "template",
+          `POST /video/templates/${templateId}/duplicate`,
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Video template duplicated.\n\nNew UID: ${template.uid}\nName: ${template.name}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  server.tool(
+    "pictify_delete_video_template",
+    "Permanently delete a video template. This cannot be undone, and any automation rendering " +
+      "from it stops working. Renders already produced from it are unaffected.",
+    {
+      templateId: z.string().describe("The video template UID to delete"),
+    },
+    async ({ templateId }) => {
+      try {
+        await client.del(`/video/templates/${templateId}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Video template ${templateId} deleted.`,
             },
           ],
         };

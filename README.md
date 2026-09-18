@@ -132,23 +132,13 @@ Try these prompts after connecting:
 | Tool | Description |
 |------|-------------|
 | `pictify_create_image` | Generate an image from HTML/CSS, a URL screenshot, or a template |
-| `pictify_list_images` | List previously generated images |
 | `pictify_get_image` | Get details of a specific image by ID |
 
-### GIFs
+### Render History
 
 | Tool | Description |
 |------|-------------|
-| `pictify_list_gifs` | List previously generated GIFs |
-| `pictify_get_gif` | Get details of a specific GIF by ID |
-
-### PDF Generation
-
-| Tool | Description |
-|------|-------------|
-| `pictify_render_pdf` | Generate single-page PDF from a template |
-| `pictify_render_multi_page_pdf` | Generate multi-page PDF from a template |
-| `pictify_list_pdf_presets` | List available PDF page size presets |
+| `pictify_list_renders` | List everything rendered — images, GIFs, PDFs and videos in one feed |
 
 ### Template Management
 
@@ -157,10 +147,13 @@ Try these prompts after connecting:
 | `pictify_list_templates` | List saved templates with filtering and pagination |
 | `pictify_get_template` | Get template details |
 | `pictify_get_template_variables` | Get template variable definitions and types |
-| `pictify_render_template` | Render a template with variables (supports layout variants) |
+| `pictify_render_template` | Render a template with variables — images and PDFs (`format: 'pdf'`) |
+| `pictify_multi_size_render` | Render one template at several sizes in a single call |
 | `pictify_create_template` | Create a new template (HTML or FabricJS) |
 | `pictify_update_template` | Update an existing template |
 | `pictify_delete_template` | Delete a template |
+| `pictify_validate_expression` | Check a `{{ }}` expression parses before using it |
+| `pictify_list_expression_functions` | List the functions available inside expressions |
 
 ### Batch Operations
 
@@ -175,10 +168,14 @@ Try these prompts after connecting:
 | Tool | Description |
 |------|-------------|
 | `pictify_list_video_templates` | List your Remotion video templates |
+| `pictify_get_video_template` | Get one video template in full |
 | `pictify_get_video_template_variables` | Discover the variables a video template expects |
 | `pictify_render_video` | Render a video template to MP4 or GIF |
 | `pictify_create_video_template` | Upload your own Remotion scene as a template |
 | `pictify_generate_video_template` | Generate a video template from a text prompt |
+| `pictify_update_video_template` | Update a video template's name, size, duration or code |
+| `pictify_duplicate_video_template` | Copy a video template |
+| `pictify_delete_video_template` | Delete a video template |
 
 ## Configuration
 

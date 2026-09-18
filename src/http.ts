@@ -21,8 +21,7 @@ import {
   shutdownAnalytics,
 } from "./analytics.js";
 import { registerImageTools } from "./tools/images.js";
-import { registerGifTools } from "./tools/gifs.js";
-import { registerPdfTools } from "./tools/pdfs.js";
+import { registerRenderTools } from "./tools/renders.js";
 import { registerTemplateTools } from "./tools/templates.js";
 import { registerBatchTools } from "./tools/batch.js";
 import { registerVideoTools } from "./tools/videos.js";
@@ -154,8 +153,7 @@ function createMcpServer(apiKey: string, source: string | null = null): McpServe
   }
 
   registerImageTools(server, client);
-  registerGifTools(server, client);
-  registerPdfTools(server, client);
+  registerRenderTools(server, client);
   registerTemplateTools(server, client);
   registerBatchTools(server, client);
   registerVideoTools(server, client);

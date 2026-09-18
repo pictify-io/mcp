@@ -106,44 +106,6 @@ export function registerImageTools(server: McpServer, client: PictifyClient) {
   );
 
   server.tool(
-    "pictify_list_images",
-    "List previously generated images from your account with pagination. " +
-      "Returns image URLs, IDs, dimensions, format, and creation timestamps. " +
-      "Use this to browse your render history or find a previously generated image.",
-    {
-      limit: z
-        .number()
-        .min(1)
-        .max(100)
-        .default(30)
-        .describe("Number of images to return (1-100)"),
-      offset: z
-        .number()
-        .min(0)
-        .default(0)
-        .describe("Number of images to skip for pagination"),
-    },
-    async ({ limit, offset }) => {
-      try {
-        const result = await client.get<{ images: unknown[]; pagination: unknown }>("/image", {
-          limit,
-          offset,
-        });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      } catch (error) {
-        return formatError(error);
-      }
-    },
-  );
-
-  server.tool(
     "pictify_get_image",
     "Get details of a specific image by its UID. " +
       "Returns the image URL, dimensions, format, and creation timestamp.",

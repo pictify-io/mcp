@@ -10,8 +10,7 @@ An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [P
 ### What can it do?
 
 - **Generate images** from HTML/CSS, URLs, or reusable templates (OG images, Twitter cards, banners, product screenshots)
-- **Create animated GIFs** by rendering a Remotion video template to GIF
-- **Render videos** from templates, including agent-authored Remotion scenes
+- **Render videos and animated GIFs** from templates, including agent-authored Remotion scenes
 - **Render PDFs** from templates — invoices, certificates, reports, shipping labels
 - **Batch generate** up to 100 personalized images in one request (team badges, event passes, product catalogs)
 - **Template system** with 50+ expression functions for dynamic content (conditionals, string manipulation, date formatting)
@@ -137,10 +136,6 @@ Try these prompts after connecting:
 | `pictify_get_image` | Get details of a specific image by ID |
 
 ### GIFs
-
-GIFs are produced through the video pipeline: render a Remotion video template
-with `format: "gif"` using `pictify_render_video`. The tools here read GIFs your
-account already has.
 
 | Tool | Description |
 |------|-------------|

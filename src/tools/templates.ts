@@ -112,6 +112,8 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
     "pictify_render_template",
     "Render a saved template with variable substitutions to produce an image or a PDF. " +
       "This is also how you get a PDF out of Pictify: pass format: 'pdf'. " +
+      "For a multi-page PDF — one page per row of data, e.g. a run of invoices or certificates " +
+      "in a single file — pass variableSets instead of variables. " +
       "WORKFLOW: 1) Use pictify_list_templates to find a template, " +
       "2) Use pictify_get_template_variables to discover its variables, " +
       "3) Call this tool with the variable values. " +
@@ -158,10 +160,37 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
             "Use 'default' for the base layout. Example: ['default', 'twitter-post', 'facebook-post']. " +
             "Returns a results array with one entry per layout.",
         ),
+      variableSets: z
+        .array(z.record(z.unknown()))
+        .min(1)
+        .max(100)
+        .optional()
+        .describe(
+          "PDF only: render one page per row into a SINGLE PDF (1-100 rows). " +
+            "Example: [{ name: 'Alice' }, { name: 'Bob' }] gives a two-page PDF. " +
+            "Use this instead of variables, not alongside it. " +
+            "For one separate image per row instead, use pictify_batch_render.",
+        ),
+      preset: z
+        .string()
+        .optional()
+        .describe(
+          "PDF only: page size, e.g. 'A4' or 'Letter'. " +
+            "Defaults to the template's own page size. A row taller than the page flows onto the next.",
+        ),
     },
-    async ({ templateId, variables, format, quality, layout, layouts }) => {
+    async ({ templateId, variables, format, quality, layout, layouts, variableSets, preset }) => {
       try {
+        if (variableSets && format !== "pdf") {
+          throw new ToolInputError(
+            "variableSets makes a multi-page PDF, so format must be 'pdf'. " +
+              "For one image per row, use pictify_batch_render instead.",
+          );
+        }
+
         const body: Record<string, unknown> = { variables, format, quality };
+        if (variableSets) body.variableSets = variableSets;
+        if (preset) body.preset = preset;
         if (layouts && layouts.length > 0) {
           body.layouts = layouts;
         } else if (layout) {

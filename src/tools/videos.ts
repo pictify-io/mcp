@@ -46,7 +46,11 @@ export function registerVideoTools(server: McpServer, client: PictifyClient) {
         const lines = (result.templates || []).map(
           (t) =>
             `- ${t.name || "Untitled"} (${t.uid}) — ${t.kind}, ${t.width}x${t.height}, ` +
-            `${Math.round((t.durationInFrames / (t.fps || 30)) * 10) / 10}s`,
+            // Timeline templates can carry no durationInFrames, which printed
+            // "NaNs" where a length should be.
+            (t.durationInFrames
+              ? `${Math.round((t.durationInFrames / (t.fps || 30)) * 10) / 10}s`
+              : "length set in the timeline"),
         );
         return {
           content: [

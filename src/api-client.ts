@@ -75,7 +75,7 @@ export class PictifyClient {
     this.source = source && source.trim() ? source.trim() : null;
   }
 
-  private buildHeaders(method: HttpMethod): Record<string, string> {
+  private buildHeaders(method: HttpMethod, hasBody: boolean): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       "User-Agent": this.userAgent,
@@ -83,7 +83,13 @@ export class PictifyClient {
     if (this.source) {
       headers["X-Pictify-MCP-Source"] = this.source;
     }
-    if (method === "POST" || method === "PUT") {
+    /*
+     * Only when there is actually a body. Declaring application/json and then
+     * sending nothing makes Fastify answer "Body cannot be empty when
+     * content-type is set to 'application/json'" — which is how the bodyless
+     * POSTs (cancel a batch, duplicate a template) failed every time.
+     */
+    if (hasBody && (method === "POST" || method === "PUT")) {
       headers["Content-Type"] = "application/json";
     }
     return headers;
@@ -111,7 +117,7 @@ export class PictifyClient {
       try {
         const res = await fetch(`${this.baseUrl}${path}`, {
           method,
-          headers: this.buildHeaders(method),
+          headers: this.buildHeaders(method, body !== undefined && body !== null),
           body: body ? JSON.stringify(body) : undefined,
           signal: controller.signal,
         });

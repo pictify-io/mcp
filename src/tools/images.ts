@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { PictifyClient } from "../api-client.js";
+import { PictifyApiError, PictifyClient } from "../api-client.js";
 import { formatError, requireExactlyOne } from "../utils.js";
 
 export function registerImageTools(server: McpServer, client: PictifyClient) {
@@ -114,7 +114,22 @@ export function registerImageTools(server: McpServer, client: PictifyClient) {
     },
     async ({ imageId }) => {
       try {
-        const result = await client.get<unknown>(`/image/${imageId}`);
+        /*
+         * Read-after-write: the image row is written asynchronously once the
+         * render returns, so an agent that calls this immediately after
+         * pictify_create_image can beat the record into existence and get a
+         * 404 for something that plainly exists — it has the URL in hand.
+         * Measured at ~37ms in local testing; one retry closes it, and a real
+         * 404 costs only that one extra look.
+         */
+        let result: unknown;
+        try {
+          result = await client.get<unknown>(`/image/${imageId}`);
+        } catch (error) {
+          if (!(error instanceof PictifyApiError) || error.status !== 404) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          result = await client.get<unknown>(`/image/${imageId}`);
+        }
         return {
           content: [
             {

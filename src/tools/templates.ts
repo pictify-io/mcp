@@ -507,7 +507,12 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
     async ({ templateId, sizes, variables, format, quality }) => {
       try {
         const result = await client.post<{
-          results?: Array<{ label?: string; width: number; height: number; url: string }>;
+          // Dimensions come back nested under `size`, not flat on the result.
+          results?: Array<{
+            url: string;
+            id?: string;
+            size?: { width?: number; height?: number; preset?: string | null; label?: string };
+          }>;
         }>(`/templates/${templateId}/multi-size-render`, { sizes, variables, format, quality });
 
         const results = expectField(
@@ -515,9 +520,12 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
           "results",
           `POST /templates/${templateId}/multi-size-render`,
         );
-        const lines = results.map(
-          (r) => `  ${r.label || `${r.width}x${r.height}`} — ${r.width}x${r.height}: ${r.url}`,
-        );
+        const lines = results.map((r) => {
+          const size = r.size || {};
+          const dimensions =
+            size.width && size.height ? `${size.width}x${size.height}` : size.preset || "size";
+          return `  ${size.label || dimensions} — ${dimensions}: ${r.url}`;
+        });
         return {
           content: [
             {

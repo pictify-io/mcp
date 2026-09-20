@@ -222,7 +222,16 @@ const mcpServerUrl = new URL(
   process.env.MCP_PUBLIC_URL || `http://localhost:${port}`,
 );
 const publicUrl = mcpServerUrl.origin;
-const authorizationServer = process.env.PICTIFY_AUTH_SERVER || "https://api.pictify.io";
+/*
+ * Both spellings. The deployed pm2 ecosystem file has always set
+ * PICTIFY_AUTH_SERVER_URL, so reading only PICTIFY_AUTH_SERVER silently
+ * ignored it — harmless while the two agree on api.pictify.io, and a
+ * confusing afternoon the first time someone points one at staging.
+ */
+const authorizationServer =
+  process.env.PICTIFY_AUTH_SERVER_URL ||
+  process.env.PICTIFY_AUTH_SERVER ||
+  "https://api.pictify.io";
 
 const resourceMetadata = {
   resource: publicUrl,

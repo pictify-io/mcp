@@ -11,7 +11,7 @@
   },
   "scripts": {
     "build": "tsc && chmod 755 build/index.js build/http.js",
-    "test": "tsc -p tsconfig.test.json && node --test \"build-test/**/*.test.js\"",
+    "test": "tsc -p tsconfig.test.json && node --test $(find build-test -name '*.test.js')",
     "start:http": "node build/http.js",
     "prepublishOnly": "npm run build",
     "inspector": "npx @modelcontextprotocol/inspector node build/index.js"

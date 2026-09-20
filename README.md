@@ -189,8 +189,8 @@ Try these prompts after connecting:
 
 Self-hosting the HTTP server adds `MCP_PORT`, `MCP_PUBLIC_URL` (the public
 origin, used to build the protected-resource metadata document) and
-`PICTIFY_AUTH_SERVER` (the OAuth authorization server to point clients at,
-defaulting to `https://api.pictify.io`).
+`PICTIFY_AUTH_SERVER_URL` (the OAuth authorization server to point clients at,
+defaulting to `https://api.pictify.io`; `PICTIFY_AUTH_SERVER` is accepted too).
 
 ### Usage analytics
 

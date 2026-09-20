@@ -54,10 +54,84 @@ const EXPECTED_ERROR_PATTERNS: RegExp[] = [
 ];
 
 /**
- * `beforeSend` hook for @posthog/mcp: drop `$exception` events whose message
- * matches an expected-failure pattern; pass everything else through untouched.
+ * Directory crawlers and reputation scanners, by the `clientInfo.name` they
+ * introduce themselves with.
+ *
+ * These accounted for roughly 37,700 of the ~38,000 analytics events this
+ * server produced in its first six weeks: about a thousand connects a day, each
+ * one an initialize and a tools/list, and between them zero real usage. They
+ * are not a problem — being indexed is how people find the server — but they
+ * drowned the funnel they were measured in.
+ *
+ * Every name here was observed connecting and never calling a tool. Extendable
+ * at runtime via PICTIFY_PROBE_CLIENTS (comma-separated) so a new crawler
+ * doesn't need a release.
+ */
+const KNOWN_PROBE_CLIENTS = new Set([
+  "agent-tools.cloud",
+  "agentstatus-probe",
+  "glama",
+  "glimind-probe",
+  "labsco-verify",
+  "mcp-reputation-scanner",
+  "mcp-rugpull-research",
+  "mcpbeat",
+  "mcpdd",
+  "mcphub",
+  "mcpindex-trust",
+  "mcpscan",
+  "mcpwatch",
+  "orank-scanner",
+  "policylayer-crawler",
+  "proofbench-probe",
+  "reliability-bureau-spike",
+  "rokmcp-probe",
+  "smithery-probe",
+  "verifymcp-probe",
+]);
+
+/*
+ * Deliberately narrow. A loose pattern here silently deletes real users'
+ * analytics, which is a failure nobody notices — so it matches only the naming
+ * conventions crawlers actually announce themselves with, and never a bare word
+ * that a real client might also use ("mcp", "glama-chat", "cursor").
+ */
+const PROBE_NAME_PATTERN = /[-_](probe|scanner|crawler)$/i;
+
+function envProbeClients(): Set<string> {
+  const extra = (process.env.PICTIFY_PROBE_CLIENTS ?? "")
+    .split(",")
+    .map((name) => name.trim().toLowerCase())
+    .filter(Boolean);
+  return new Set([...KNOWN_PROBE_CLIENTS, ...extra]);
+}
+
+/** True when this client is a directory crawler rather than somebody using the product. */
+export function isProbeClient(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const normalized = name.trim().toLowerCase();
+  if (!normalized) return false;
+  return envProbeClients().has(normalized) || PROBE_NAME_PATTERN.test(normalized);
+}
+
+/**
+ * `beforeSend` hook for @posthog/mcp. Two jobs:
+ *
+ * 1. Drop the `$exception` sibling of expected, caller-actionable failures.
+ * 2. Drop crawler traffic — except its tool calls, which are tagged instead.
+ *
+ * Tool calls are never dropped, whoever made them. They are the scarce event
+ * (140 in six weeks, against 19,000 connects), and a crawler that starts
+ * calling tools is worth seeing rather than silently discarding. Tagging them
+ * `mcp_probe` lets a query exclude them without the data being gone.
  */
 export const dropExpectedExceptions: BeforeSendFn = (event) => {
+  if (isProbeClient(event.properties?.["$mcp_client_name"])) {
+    if (event.event !== "$mcp_tool_call") return null;
+    event.properties = { ...event.properties, mcp_probe: true };
+    return event;
+  }
+
   if (event.event !== "$exception") return event;
   const list = event.properties?.["$exception_list"];
   const first = Array.isArray(list) ? (list[0] as { value?: unknown } | undefined) : undefined;

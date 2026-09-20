@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { PictifyClient } from "../api-client.js";
-import { formatError } from "../utils.js";
+import { PictifyApiError, PictifyClient } from "../api-client.js";
+import { formatError, requireExactlyOne } from "../utils.js";
 
 export function registerImageTools(server: McpServer, client: PictifyClient) {
   server.tool(
@@ -77,6 +77,12 @@ export function registerImageTools(server: McpServer, client: PictifyClient) {
     },
     async ({ html, url, template, variables, width, height, fileExtension, selector }) => {
       try {
+        requireExactlyOne(
+          { html, url, template },
+          "Pass html to render markup you have, url to screenshot a live page, " +
+            "or template (a template UID, with variables) to render a saved template.",
+        );
+
         const body: Record<string, unknown> = { width, height, fileExtension };
         if (html) body.html = html;
         if (url) body.url = url;
@@ -100,114 +106,6 @@ export function registerImageTools(server: McpServer, client: PictifyClient) {
   );
 
   server.tool(
-    "pictify_create_canvas_image",
-    "Generate an image from FabricJS canvas JSON data with optional variable substitution. " +
-      "Use this when you have a FabricJS canvas design (created in the Pictify visual editor or programmatically). " +
-      "Templates in Pictify are built using FabricJS — this endpoint lets you render canvas JSON directly " +
-      "without saving it as a template first. " +
-      "For rendering a saved template, use pictify_render_template instead. " +
-      "Returns the hosted image URL (CDN-backed).",
-    {
-      fabricJSData: z
-        .record(z.unknown())
-        .describe(
-          "FabricJS canvas JSON object. This is the serialized canvas data from FabricJS (canvas.toJSON()). " +
-            "Contains objects array with shapes, text, images, and their properties.",
-        ),
-      variables: z
-        .record(z.unknown())
-        .optional()
-        .describe("Variables to substitute into the canvas elements that have variable bindings."),
-      variableDefinitions: z
-        .array(
-          z.object({
-            name: z.string(),
-            type: z.enum(["text", "image", "color", "number", "boolean"]),
-            defaultValue: z.string().optional(),
-            description: z.string().optional(),
-          }),
-        )
-        .optional()
-        .describe("Variable definitions describing the types and defaults for each variable."),
-      width: z
-        .number()
-        .min(1)
-        .max(4000)
-        .optional()
-        .describe("Output image width in pixels. If omitted, uses the canvas width."),
-      height: z
-        .number()
-        .min(1)
-        .max(4000)
-        .optional()
-        .describe("Output image height in pixels. If omitted, uses the canvas height."),
-      fileExtension: z
-        .enum(["png", "jpg", "jpeg", "webp"])
-        .default("png")
-        .describe("Output image format"),
-    },
-    async ({ fabricJSData, variables, variableDefinitions, width, height, fileExtension }) => {
-      try {
-        const body: Record<string, unknown> = { fabricJSData, fileExtension };
-        if (variables) body.variables = variables;
-        if (variableDefinitions) body.variableDefinitions = variableDefinitions;
-        if (width) body.width = width;
-        if (height) body.height = height;
-
-        const result = await client.post<{ url: string; id: string }>("/image/canvas", body);
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Canvas image generated successfully.\n\nURL: ${result.url}\nID: ${result.id}`,
-            },
-          ],
-        };
-      } catch (error) {
-        return formatError(error);
-      }
-    },
-  );
-
-  server.tool(
-    "pictify_list_images",
-    "List previously generated images from your account with pagination. " +
-      "Returns image URLs, IDs, dimensions, format, and creation timestamps. " +
-      "Use this to browse your render history or find a previously generated image.",
-    {
-      limit: z
-        .number()
-        .min(1)
-        .max(100)
-        .default(30)
-        .describe("Number of images to return (1-100)"),
-      offset: z
-        .number()
-        .min(0)
-        .default(0)
-        .describe("Number of images to skip for pagination"),
-    },
-    async ({ limit, offset }) => {
-      try {
-        const result = await client.get<{ images: unknown[]; pagination: unknown }>("/image", {
-          limit,
-          offset,
-        });
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
-        };
-      } catch (error) {
-        return formatError(error);
-      }
-    },
-  );
-
-  server.tool(
     "pictify_get_image",
     "Get details of a specific image by its UID. " +
       "Returns the image URL, dimensions, format, and creation timestamp.",
@@ -216,7 +114,22 @@ export function registerImageTools(server: McpServer, client: PictifyClient) {
     },
     async ({ imageId }) => {
       try {
-        const result = await client.get<unknown>(`/image/${imageId}`);
+        /*
+         * Read-after-write: the image row is written asynchronously once the
+         * render returns, so an agent that calls this immediately after
+         * pictify_create_image can beat the record into existence and get a
+         * 404 for something that plainly exists — it has the URL in hand.
+         * Measured at ~37ms in local testing; one retry closes it, and a real
+         * 404 costs only that one extra look.
+         */
+        let result: unknown;
+        try {
+          result = await client.get<unknown>(`/image/${imageId}`);
+        } catch (error) {
+          if (!(error instanceof PictifyApiError) || error.status !== 404) throw error;
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          result = await client.get<unknown>(`/image/${imageId}`);
+        }
         return {
           content: [
             {

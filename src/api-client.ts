@@ -14,6 +14,24 @@ export class PictifyApiError extends Error {
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
+/*
+ * Which methods may be retried after a 5xx or a dropped connection.
+ *
+ * Every POST this client makes either bills a render or creates a resource,
+ * and none of the render endpoints honour an Idempotency-Key — only the
+ * campaign routes do. So a retry after a 502 on a request the server actually
+ * completed produces a second render on the customer's quota, or a duplicate
+ * template, and the caller is told about neither. A failed POST is reported
+ * instead: one honest error beats a silent double charge.
+ *
+ * It also bounds the worst case. pictify_generate_video_template allows eleven
+ * minutes; three retries made that three quarters of an hour before the agent
+ * heard anything.
+ *
+ * GET, PUT and DELETE are idempotent, so repeating them costs nothing.
+ */
+const RETRYABLE_METHODS = new Set<HttpMethod>(["GET", "PUT", "DELETE"]);
+
 function parseErrorField(body: Record<string, unknown>, field: string): string | undefined {
   const value = body[field];
   return typeof value === "string" ? value : undefined;
@@ -57,7 +75,7 @@ export class PictifyClient {
     this.source = source && source.trim() ? source.trim() : null;
   }
 
-  private buildHeaders(method: HttpMethod): Record<string, string> {
+  private buildHeaders(method: HttpMethod, hasBody: boolean): Record<string, string> {
     const headers: Record<string, string> = {
       Authorization: `Bearer ${this.apiKey}`,
       "User-Agent": this.userAgent,
@@ -65,7 +83,13 @@ export class PictifyClient {
     if (this.source) {
       headers["X-Pictify-MCP-Source"] = this.source;
     }
-    if (method === "POST" || method === "PUT") {
+    /*
+     * Only when there is actually a body. Declaring application/json and then
+     * sending nothing makes Fastify answer "Body cannot be empty when
+     * content-type is set to 'application/json'" — which is how the bodyless
+     * POSTs (cancel a batch, duplicate a template) failed every time.
+     */
+    if (hasBody && (method === "POST" || method === "PUT")) {
       headers["Content-Type"] = "application/json";
     }
     return headers;
@@ -78,9 +102,10 @@ export class PictifyClient {
     options?: { timeoutMs?: number },
   ): Promise<T> {
     const timeoutMs = options?.timeoutMs ?? this.timeout;
+    const maxRetries = RETRYABLE_METHODS.has(method) ? this.maxRetries : 0;
     let lastError: Error = new Error("Request failed after retries");
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (attempt > 0) {
         const delay = Math.pow(2, attempt - 1) * 1000;
         await new Promise((r) => setTimeout(r, delay));
@@ -92,7 +117,7 @@ export class PictifyClient {
       try {
         const res = await fetch(`${this.baseUrl}${path}`, {
           method,
-          headers: this.buildHeaders(method),
+          headers: this.buildHeaders(method, body !== undefined && body !== null),
           body: body ? JSON.stringify(body) : undefined,
           signal: controller.signal,
         });
@@ -128,6 +153,8 @@ export class PictifyClient {
               parseErrorField(errorBody, "detail") ??
               `Server returned ${res.status}`,
           );
+          // A 5xx on a method we cannot safely repeat is the final answer.
+          if (attempt === maxRetries) throw lastError;
           continue;
         }
 
@@ -144,7 +171,7 @@ export class PictifyClient {
             `The request timed out after ${timeoutMs / 1000} seconds`,
           );
         }
-        if (attempt === this.maxRetries) throw err;
+        if (attempt === maxRetries) throw err;
       }
     }
 

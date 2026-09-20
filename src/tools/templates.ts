@@ -1,14 +1,13 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { PictifyClient } from "../api-client.js";
-import { formatError } from "../utils.js";
+import { expectField, formatError, requireExactlyOne, ToolInputError } from "../utils.js";
 
 export function registerTemplateTools(server: McpServer, client: PictifyClient) {
   server.tool(
     "pictify_list_templates",
     "List saved templates in your Pictify account with pagination and filtering. " +
-      "Templates are reusable designs (built with the FabricJS visual editor or HTML) with variable placeholders " +
-      "for dynamic content generation. " +
+      "Templates are reusable HTML designs with {{variableName}} placeholders for dynamic content. " +
       "Use this to discover available templates before rendering. " +
       "Returns template names, IDs, dimensions, output formats, and pagination info.",
     {
@@ -80,8 +79,8 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
   server.tool(
     "pictify_get_template_variables",
     "Get the variable definitions for a template. " +
-      "IMPORTANT: Always call this before pictify_render_template, pictify_batch_render, " +
-      "pictify_render_pdf, or pictify_render_multi_page_pdf to discover what variables are available. " +
+      "IMPORTANT: Always call this before pictify_render_template, pictify_multi_size_render or " +
+      "pictify_batch_render, to discover what variables are available. " +
       "Returns variable names, types (text, image, color, number, boolean), default values, and descriptions. " +
       "Variables support Pictify's expression engine with 50+ functions for dynamic content " +
       "(e.g., IF/ELSE conditionals, string manipulation, date formatting, math operations).",
@@ -111,8 +110,10 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
 
   server.tool(
     "pictify_render_template",
-    "Render a saved template with variable substitutions to produce an image or PDF. " +
-      "Templates can be FabricJS canvas designs or HTML — both are rendered the same way via this endpoint. " +
+    "Render a saved template with variable substitutions to produce an image or a PDF. " +
+      "This is also how you get a PDF out of Pictify: pass format: 'pdf'. " +
+      "For a multi-page PDF — one page per row of data, e.g. a run of invoices or certificates " +
+      "in a single file — pass variableSets instead of variables. " +
       "WORKFLOW: 1) Use pictify_list_templates to find a template, " +
       "2) Use pictify_get_template_variables to discover its variables, " +
       "3) Call this tool with the variable values. " +
@@ -159,10 +160,37 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
             "Use 'default' for the base layout. Example: ['default', 'twitter-post', 'facebook-post']. " +
             "Returns a results array with one entry per layout.",
         ),
+      variableSets: z
+        .array(z.record(z.unknown()))
+        .min(1)
+        .max(100)
+        .optional()
+        .describe(
+          "PDF only: render one page per row into a SINGLE PDF (1-100 rows). " +
+            "Example: [{ name: 'Alice' }, { name: 'Bob' }] gives a two-page PDF. " +
+            "Use this instead of variables, not alongside it. " +
+            "For one separate image per row instead, use pictify_batch_render.",
+        ),
+      preset: z
+        .string()
+        .optional()
+        .describe(
+          "PDF only: page size, e.g. 'A4' or 'Letter'. " +
+            "Defaults to the template's own page size. A row taller than the page flows onto the next.",
+        ),
     },
-    async ({ templateId, variables, format, quality, layout, layouts }) => {
+    async ({ templateId, variables, format, quality, layout, layouts, variableSets, preset }) => {
       try {
+        if (variableSets && format !== "pdf") {
+          throw new ToolInputError(
+            "variableSets makes a multi-page PDF, so format must be 'pdf'. " +
+              "For one image per row, use pictify_batch_render instead.",
+          );
+        }
+
         const body: Record<string, unknown> = { variables, format, quality };
+        if (variableSets) body.variableSets = variableSets;
+        if (preset) body.preset = preset;
         if (layouts && layouts.length > 0) {
           body.layouts = layouts;
         } else if (layout) {
@@ -186,7 +214,12 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
           body,
         );
 
-        const lines = result.results.map(
+        const results = expectField(
+          result?.results,
+          "results",
+          `POST /templates/${templateId}/render`,
+        );
+        const lines = results.map(
           (r) => `  ${r.name} (${r.layout}) — ${r.width}x${r.height}: ${r.url}`,
         );
 
@@ -282,6 +315,12 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
     },
     async ({ name, html, fabricJSData, width, height, type, category, tags, variableDefinitions, outputFormat }) => {
       try {
+        requireExactlyOne(
+          { html, fabricJSData },
+          "Pass html for a markup template (use {{variableName}} placeholders), " +
+            "or fabricJSData for a canvas built in the Pictify visual editor.",
+        );
+
         const body: Record<string, unknown> = { name };
         if (html) body.html = html;
         if (fabricJSData) body.fabricJSData = fabricJSData;
@@ -297,16 +336,17 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
           "/templates",
           body,
         );
+        const template = expectField(result?.template, "template", "POST /templates");
         return {
           content: [
             {
               type: "text" as const,
               text:
                 `Template created successfully.\n\n` +
-                `ID: ${result.template.uid}\n` +
-                `Name: ${result.template.name}\n\n` +
+                `ID: ${template.uid}\n` +
+                `Name: ${template.name}\n\n` +
                 `Next steps:\n` +
-                `1. Use pictify_get_template_variables with ID '${result.template.uid}' to see detected variables\n` +
+                `1. Use pictify_get_template_variables with ID '${template.uid}' to see detected variables\n` +
                 `2. Use pictify_render_template to render it with specific values`,
             },
           ],
@@ -360,18 +400,37 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
     },
     async ({ templateId, ...updates }) => {
       try {
+        // Every field is optional here, so "update nothing" is a call the
+        // schema accepts. It reads as success and changes nothing, which is
+        // worse than being told.
         const body = Object.fromEntries(
           Object.entries(updates).filter(([, v]) => v !== undefined),
         );
+        if (Object.keys(body).length === 0) {
+          throw new ToolInputError(
+            "Nothing to update. Pass at least one of name, html, fabricJSData, width, height or variableDefinitions.",
+          );
+        }
+        if (updates.html !== undefined && updates.fabricJSData !== undefined) {
+          throw new ToolInputError(
+            "html and fabricJSData are mutually exclusive — update one or the other, not both.",
+          );
+        }
+
         const result = await client.put<{ template: { uid: string; name: string } }>(
           `/templates/${templateId}`,
           body,
+        );
+        const template = expectField(
+          result?.template,
+          "template",
+          `PUT /templates/${templateId}`,
         );
         return {
           content: [
             {
               type: "text" as const,
-              text: `Template updated successfully.\n\nID: ${result.template.uid}\nName: ${result.template.name}`,
+              text: `Template updated successfully.\n\nID: ${template.uid}\nName: ${template.name}`,
             },
           ],
         };
@@ -396,6 +455,155 @@ export function registerTemplateTools(server: McpServer, client: PictifyClient) 
             {
               type: "text" as const,
               text: `Template ${templateId} deleted successfully.`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  server.tool(
+    "pictify_multi_size_render",
+    "Render one template at several sizes in a single call — the same design as a 1200x630 OG card, " +
+      "a 1080x1080 square and a 1600x900 banner, say. " +
+      "Use this instead of calling pictify_render_template once per size: it is one request, one set of " +
+      "variables, and the results come back labelled. " +
+      "Different SIZES of one design; for different LAYOUT VARIANTS of it, use the 'layouts' argument " +
+      "on pictify_render_template instead.",
+    {
+      templateId: z.string().describe("The template UID to render"),
+      sizes: z
+        .array(
+          z.object({
+            preset: z.string().optional().describe("Named size preset, if the template defines one"),
+            width: z.number().min(10).max(4096).optional().describe("Width in pixels"),
+            height: z.number().min(10).max(4096).optional().describe("Height in pixels"),
+            label: z.string().optional().describe("Your name for this size, echoed back on the result"),
+          }),
+        )
+        .min(1)
+        .max(20)
+        .describe(
+          "The sizes to render (1-20). Each entry is either a preset, or an explicit width and height. " +
+            "Example: [{ label: 'og', width: 1200, height: 630 }, { label: 'square', width: 1080, height: 1080 }]",
+        ),
+      variables: z
+        .record(z.unknown())
+        .optional()
+        .describe(
+          "Template variables, applied to every size. " +
+            "Call pictify_get_template_variables to see what the template expects.",
+        ),
+      format: z.enum(["png", "jpeg", "webp"]).default("png").describe("Output format for every size"),
+      quality: z
+        .number()
+        .min(0.1)
+        .max(1)
+        .default(0.9)
+        .describe("Output quality (0.1-1.0). Only affects JPEG and WebP."),
+    },
+    async ({ templateId, sizes, variables, format, quality }) => {
+      try {
+        const result = await client.post<{
+          // Dimensions come back nested under `size`, not flat on the result.
+          results?: Array<{
+            url: string;
+            id?: string;
+            size?: { width?: number; height?: number; preset?: string | null; label?: string };
+          }>;
+        }>(`/templates/${templateId}/multi-size-render`, { sizes, variables, format, quality });
+
+        const results = expectField(
+          result?.results,
+          "results",
+          `POST /templates/${templateId}/multi-size-render`,
+        );
+        const lines = results.map((r) => {
+          const size = r.size || {};
+          const dimensions =
+            size.width && size.height ? `${size.width}x${size.height}` : size.preset || "size";
+          return `  ${size.label || dimensions} — ${dimensions}: ${r.url}`;
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Rendered at ${results.length} size${results.length === 1 ? "" : "s"}.\n\n${lines.join("\n")}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  /*
+   * The template tools advertise "50+ expression functions" and, until these
+   * two, gave no way to find out what they are or whether one you wrote parses.
+   * The alternative was to save a template, render it, and read the failure.
+   */
+
+  server.tool(
+    "pictify_validate_expression",
+    "Check that a template expression parses before you put it in a template. " +
+      "Pass the inside of the braces, not the braces: 'IF(premium, \"PRO\", \"FREE\")', not '{{...}}'. " +
+      "Returns whether it is valid and, if not, what is wrong with it.",
+    {
+      expression: z
+        .string()
+        .describe(
+          "The expression to check, without the surrounding {{ }}. " +
+            "Examples: 'price * 1.1', 'toUpperCase(name)', 'IF(count > 0, \"in stock\", \"sold out\")'",
+        ),
+    },
+    async ({ expression }) => {
+      try {
+        const result = await client.post<{ valid: boolean; error?: string | null }>(
+          "/templates/expression/validate",
+          { expression },
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: result?.valid
+                ? `Valid: {{${expression}}}`
+                : `Invalid: {{${expression}}}\n\n${result?.error || "Expression could not be parsed."}`,
+            },
+          ],
+        };
+      } catch (error) {
+        return formatError(error);
+      }
+    },
+  );
+
+  server.tool(
+    "pictify_list_expression_functions",
+    "List the functions available inside template expressions, with a line on what each does. " +
+      "Call this before writing template HTML with {{ }} logic, so the expressions use functions " +
+      "that exist rather than ones that look like they should.",
+    {},
+    async () => {
+      try {
+        const result = await client.get<{ functions?: Array<{ name: string; description: string }> }>(
+          "/templates/expression/functions",
+        );
+        const functions = expectField(
+          result?.functions,
+          "functions",
+          "GET /templates/expression/functions",
+        );
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text:
+                `${functions.length} expression functions:\n\n` +
+                functions.map((f) => `  ${f.name} — ${f.description}`).join("\n"),
             },
           ],
         };
